@@ -1,0 +1,163 @@
+@import '@fontsource/manrope/400.css';
+@import '@fontsource/manrope/500.css';
+@import '@fontsource/manrope/600.css';
+@import '@fontsource/manrope/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import 'tailwindcss';
+@import 'pdfjs-dist/web/pdf_viewer.css';
+
+/*
+ * Anduin design language (from anduintransact.com): near-black ink and white surfaces,
+ * hairline rules instead of shadows, square corners, Manrope with tight tracking for
+ * headings, IBM Plex Mono uppercase "eyebrow" labels with a small square bullet, and a
+ * sky-blue accent taken from the Anduin mark.
+ */
+@theme {
+  --font-sans: Manrope, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-ink: #141414;
+  --color-ink-2: #2b2b2b;
+  --color-ink-soft: #474747;
+  --color-muted: #858585;
+  --color-faint: #b3b3b3;
+  --color-line: #d6d6d6;
+  --color-line-soft: #e8e8e8;
+  --color-canvas: #f2f2f2;
+  --color-surface: #ffffff;
+  --color-wash: #f7f7f7;
+
+  --color-sky: #3fa6ee;
+  --color-sky-soft: #e6f3fd;
+  --color-sky-deep: #1075dc;
+  --color-navy: #162950;
+  --color-coral: #ef6445;
+  --color-coral-soft: #fdeee9;
+  --color-sand: #e7d6c2;
+
+  /* legacy names used by a few components */
+  --color-brand-50: #e6f3fd;
+  --color-brand-100: #d3eafc;
+  --color-brand-200: #a9d5f7;
+  --color-brand-500: #1075dc;
+  --color-brand-600: #1075dc;
+  --color-brand-700: #141414;
+  --color-brand-800: #141414;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'tnum' 0;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--color-sky-deep);
+  outline-offset: 1px;
+}
+
+/* Mono uppercase label with a small square bullet, as on anduintransact.com */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  flex: none;
+}
+.eyebrow.sky::before {
+  background: var(--color-sky);
+}
+.tight {
+  letter-spacing: -0.02em;
+}
+
+/* PDF.js text layer: transparent, selectable text over the canvas */
+.textLayer ::selection {
+  background: rgba(63, 166, 238, 0.35);
+}
+
+/* Overlay text boxes */
+.ov-text {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  overflow-wrap: break-word;
+  outline: none;
+  box-sizing: content-box;
+  caret-color: currentColor;
+}
+.ov-text[data-empty='true']::before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+  pointer-events: none;
+  font-style: normal;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+/* Detected-object highlights (Edit mode) */
+.obj-hover {
+  position: absolute;
+  pointer-events: none;
+  outline: 1px solid var(--color-sky);
+  background: rgba(63, 166, 238, 0.06);
+}
+.obj-hover.dashed {
+  outline-style: dashed;
+  background: transparent;
+}
+.obj-selected {
+  position: absolute;
+  pointer-events: none;
+  outline: 1.5px solid var(--color-sky-deep);
+}
+.handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border: 1.5px solid var(--color-sky-deep);
+  pointer-events: auto;
+}
+
+.thin-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: #cfcfcf;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
