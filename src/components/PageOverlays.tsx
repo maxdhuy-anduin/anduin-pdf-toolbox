@@ -37,28 +37,16 @@ export function usePageContent(sourceId: string, srcIndex: number, enabled: bool
   return content
 }
 
-const DEBUG_COLORS: Record<string, string> = {
-  TEXT_BLOCK: '#2563eb',
-  TEXT_LINE: '#16a34a',
-  TEXT_SPAN: '#86efac',
-  TABLE: '#9333ea',
-  TABLE_ROW: '#c4b5fd',
-  TABLE_CELL: '#eab308',
-  LINE: '#dc2626',
-  RECTANGLE: '#0891b2',
-  IMAGE: '#ea580c',
-}
-
 const inBox = (b: Box, x: number, y: number, slop = 0) => x >= b.x - slop && x <= b.x + b.w + slop && y >= b.y - slop && y <= b.y + b.h + slop
 
 export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }: Props) {
-  const { state, dispatch, tool, setTool, selectedObject, setSelectedObject, editRequest, debug } = useApp()
+  const { state, dispatch, tool, setTool, selectedObject, setSelectedObject, editRequest } = useApp()
   const layerRef = useRef<HTMLDivElement>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [caretAt, setCaretAt] = useState<{ x: number; y: number } | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const [ghost, setGhost] = useState<{ id: string; dx: number; dy: number; src: string | null } | null>(null)
-  const content = usePageContent(page.sourceId, page.srcIndex, tool === 'edit' || debug)
+  const content = usePageContent(page.sourceId, page.srcIndex, tool === 'edit')
 
   const draft = state.draft && state.draft.pageId === page.id ? state.draft : null
   const overlays: Overlay[] = draft && !page.overlays.some((o) => o.id === draft.overlay.id) ? [...page.overlays, draft.overlay] : page.overlays
@@ -398,7 +386,6 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
         ))}
       </div>
 
-      {debug && content && <DebugLayer content={content} scale={scale} />}
     </>
   )
 }
@@ -407,107 +394,6 @@ function ObjectTag({ o, style }: { o: ContentObject; style: React.CSSProperties 
   return (
     <div className="pointer-events-none absolute z-10 whitespace-nowrap bg-sky px-1.5 py-[1px] font-mono text-[10px] font-medium uppercase tracking-wide text-white" style={style}>
       {describeObject(o)}
-    </div>
-  )
-}
-
-/** Developer view: every detected object outlined by type, with an inspector for the object under the cursor. */
-function DebugLayer({ content, scale }: { content: PageContent; scale: number }) {
-  const [hit, setHit] = useState<{ o: ContentObject; x: number; y: number } | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
-  const ordered = useMemo(() => Object.values(content.objects).sort((a, b) => a.bounds.w * a.bounds.h - b.bounds.w * b.bounds.h), [content])
-  useEffect(() => {
-    const host = ref.current?.parentElement
-    if (!host) return
-    const onMove = (e: PointerEvent) => {
-      const r = ref.current!.getBoundingClientRect()
-      // the inspector ignores page rotation; good enough for a developer aid
-      const x = (e.clientX - r.left) / scale
-      const y = (e.clientY - r.top) / scale
-      const o = ordered.find((ob) => ob.type !== 'TABLE_ROW' && inBox(ob.bounds, x, y, ob.type === 'LINE' ? 3 : 0))
-      setHit(o ? { o, x: e.clientX - r.left, y: e.clientY - r.top } : null)
-    }
-    const onLeave = () => setHit(null)
-    host.addEventListener('pointermove', onMove)
-    host.addEventListener('pointerleave', onLeave)
-    return () => {
-      host.removeEventListener('pointermove', onMove)
-      host.removeEventListener('pointerleave', onLeave)
-    }
-  }, [ordered, scale])
-  const o = hit?.o
-  return (
-    <div ref={ref} className="pointer-events-none absolute inset-0" style={{ zIndex: 6 }}>
-      {Object.values(content.objects).map((ob) => {
-        const c = DEBUG_COLORS[ob.type]
-        const b = ob.bounds
-        const thin = ob.type === 'TEXT_SPAN' || ob.type === 'TABLE_ROW'
-        return (
-          <div
-            key={ob.id}
-            style={{
-              position: 'absolute',
-              left: b.x * scale,
-              top: b.y * scale,
-              width: Math.max(1, b.w * scale),
-              height: Math.max(1, b.h * scale),
-              outline: `${ob.type === 'TEXT_BLOCK' || ob.type === 'TABLE' ? 1.5 : 1}px ${thin ? 'dotted' : 'solid'} ${c}`,
-              background: ob === o ? `${c}22` : undefined,
-            }}
-          />
-        )
-      })}
-      {content.roots.map((id) => {
-        const ob = content.objects[id]
-        if (ob.type !== 'TEXT_BLOCK' && ob.type !== 'TABLE') return null
-        const tag = ob.type === 'TABLE' ? `TABLE ${ob.rows}×${ob.cols} · ${ob.tableKind}` : ({ heading: 'H', paragraph: 'P', 'list-item': 'LI', header: 'HDR', footer: 'FTR' } as Record<string, string>)[ob.role ?? 'paragraph']
-        return (
-          <div key={`t-${id}`} className="absolute font-mono text-[9px] font-medium leading-none text-white" style={{ left: ob.bounds.x * scale - 1, top: ob.bounds.y * scale - 11, background: DEBUG_COLORS[ob.type], padding: '1px 3px' }}>
-            {tag}
-          </div>
-        )
-      })}
-      {o && hit && (
-        <div
-          className="absolute z-20 w-[300px] border border-ink bg-white p-2.5 font-mono text-[10.5px] leading-[1.45] text-ink shadow-xl"
-          style={{ left: Math.min(hit.x + 14, ref.current!.clientWidth - 310), top: hit.y + 16 }}
-        >
-          <div className="mb-1 flex items-center gap-1.5 font-semibold">
-            <span className="inline-block h-2 w-2" style={{ background: DEBUG_COLORS[o.type] }} />
-            {o.type}
-            {o.role ? ` / ${o.role}` : ''} <span className="font-normal text-muted">{o.id}</span>
-          </div>
-          <div>
-            bounds {o.bounds.x.toFixed(1)}, {o.bounds.y.toFixed(1)} · {o.bounds.w.toFixed(1)} × {o.bounds.h.toFixed(1)} pt
-          </div>
-          {o.style && (
-            <div>
-              {o.style.fontName} → {o.style.fontFamily}
-              {o.style.bold ? ' bold' : ''}
-              {o.style.italic ? ' italic' : ''} · {o.style.fontSize}pt · {o.style.color ?? '?'} · {o.style.align} · lh {o.style.lineHeight}
-            </div>
-          )}
-          {o.type === 'TABLE' && (
-            <div>
-              {o.rows} rows × {o.cols} cols · {o.tableKind}
-            </div>
-          )}
-          {o.type === 'LINE' && (
-            <div>
-              thickness {o.thickness?.toFixed(2)} · {o.strokeColor}
-            </div>
-          )}
-          {o.type === 'RECTANGLE' && (
-            <div>
-              fill {o.fillColor ?? 'none'} · stroke {o.strokeColor ?? 'none'}
-            </div>
-          )}
-          <div className="text-muted">
-            ops {o.ops.length} {o.opsExclusive ? '(exclusive)' : '(shared/unknown)'} · items {o.sourceItems.length} · z {o.zIndex}
-          </div>
-          {o.text !== undefined && <div className="mt-1 line-clamp-4 whitespace-pre-wrap border-t border-line-soft pt-1 font-sans text-[11px]">{o.text || '(empty)'}</div>}
-        </div>
-      )}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { useApp } from '../context'
 import { clamp } from '../lib/geom'
 import { displaySize, type PageInfo, type PageModel } from '../lib/model'
 import { getPdfPage, pdfjs } from '../lib/pdfjs'
+import { LayoutLayer } from './LayoutLayer'
 import { PageOverlays } from './PageOverlays'
 import { Rotated } from './ui'
 
@@ -51,7 +52,8 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
   const holderRef = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [renderedHidden, setRenderedHidden] = useState<Set<number>>(() => new Set())
-  const { tool } = useApp()
+  const { tool, showBoxes, debug, treeFocus } = useApp()
+  const edited = useMemo(() => new Set(page.overlays.flatMap((o) => (o.source ? [o.source.objectId] : []))), [page.overlays])
   // Operators whose content has been replaced by an edit: skipped when rendering (exact hiding).
   const hiddenKey = useMemo(
     () => [...new Set(page.overlays.flatMap((o) => (o.source?.exclusive ? o.source.ops : [])))].sort((a, b) => a - b).join(','),
@@ -128,6 +130,7 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
         />
         {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
         <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
+        {(showBoxes || debug || treeFocus?.pageId === page.id) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
       </div>
     </Rotated>
   )

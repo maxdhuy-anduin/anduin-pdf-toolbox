@@ -106,7 +106,17 @@ export function Modal({ title, onClose, children, footer, wide }: { title: strin
 }
 
 /** Small dropdown menu (used for rarely-needed developer options). */
-export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: { label: string; hint?: string; checked?: boolean; onClick: () => void }[] }) {
+export interface MenuItem {
+  label: string
+  hint?: string
+  checked?: boolean
+  disabled?: boolean
+  /** A non-interactive section heading. */
+  heading?: boolean
+  onClick?: () => void
+}
+
+export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: MenuItem[] }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -120,17 +130,23 @@ export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactN
       {trigger(() => setOpen((v) => !v))}
       {open && (
         <div role="menu" className="absolute right-0 top-9 z-40 min-w-[260px] border border-line bg-white py-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.25)]">
-          {items.map((it) => (
+          {items.map((it) =>
+            it.heading ? (
+              <div key={it.label} className="mt-1 border-t border-line-soft px-3 pb-1 pt-2.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted first:mt-0 first:border-t-0">
+                {it.label}
+              </div>
+            ) : (
             <button
               key={it.label}
               role="menuitemcheckbox"
               aria-checked={it.checked}
               type="button"
+              disabled={it.disabled}
               onClick={() => {
                 setOpen(false)
-                it.onClick()
+                it.onClick?.()
               }}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink hover:bg-wash"
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink hover:bg-wash disabled:cursor-not-allowed disabled:text-faint disabled:hover:bg-transparent"
             >
               <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${it.checked ? 'border-ink bg-ink' : it.checked === false ? 'border-line' : 'border-transparent'}`}>
                 {it.checked && <span className="h-1.5 w-1.5 bg-white" />}
@@ -138,7 +154,8 @@ export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactN
               <span className="flex-1">{it.label}</span>
               {it.hint && <span className="font-mono text-[10.5px] text-muted">{it.hint}</span>}
             </button>
-          ))}
+            ),
+          )}
         </div>
       )}
     </div>

@@ -6,7 +6,10 @@
 // consecutive list items are grouped into LIST containers, and cells get span/header info.
 
 import type { Box, ContentObject, PageContent, TextStyle } from '../content/types'
-import { IDENTITY, type ChunkStyle, type ChunkType, type LayoutChunk, type LayoutPage } from './types'
+import type { ChunkStyle, ChunkType, LayoutChunk, LayoutPage, Matrix } from './types'
+
+// (inlined rather than imported so Node can run this file directly for scripts/analyze-debug.ts)
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0]
 
 export const toBounds = (b: Box) => ({ x: b.x, y: b.y, width: b.w, height: b.h })
 

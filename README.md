@@ -6,7 +6,8 @@ lines, rectangles, images), then **export a real PDF**. Hackathon MVP, not an Ac
 
 **Privacy:** everything runs in the browser. There is no backend, no upload, no analytics and no third-party requests
 (PDF.js assets and the Manrope / IBM Plex Mono fonts are served locally). Documents are never written to storage; the only
-thing remembered locally is the debug-view toggle.
+things remembered locally are the view toggles (boxes, tree, debug). The optional Adobe Extract provider is off unless
+`VITE_LAYOUT_SERVICE_URL` points at your own backend; it is never called by default.
 
 ## Run it
 
@@ -30,10 +31,17 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
 6. **Add Text** (T) → click the page, type a correction; make it bold in the right panel.
 7. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
 
-Developer view: **⋯ → Show detected objects** (or ⇧⌘D, or `?debug` in the URL) outlines every detected object by type,
-with an inspector on hover. **⋯ → Open layout test suite** loads a synthetic 9-page PDF covering the layouts below.
+**Seeing the layout model:** **Boxes** in the toolbar (or `B`, or `?boxes`) outlines every detected object by type: headings,
+paragraphs, lists, tables, cells, rules, rectangles and images. **Tree** (or `?tree`) shows the current page's object tree;
+hovering a row highlights the object on the page, and clicking pins it (in Edit mode it also selects it). **⋯ → Show detected
+objects** (⇧⌘D, `?debug`) adds text lines and spans plus an inspector: id, type, bbox, page, text, font, size, parent,
+children and source operators. **⋯ → Open layout test suite** loads a synthetic 9-page PDF covering the layouts below.
+`npm run analyze -- suite 7` prints the same tree in the terminal.
 
 ## Architecture
+
+The layout-object upgrade (normalized `LayoutChunk` tree, providers, roadmap for multi-select, copy/paste, tabs and
+Word → PDF) is described in [docs/LAYOUT-ARCHITECTURE.md](docs/LAYOUT-ARCHITECTURE.md).
 
 ```
 PDF bytes ─► PDF.js ─ getOperatorList() ─┐
@@ -51,7 +59,12 @@ Export    ─ pdf-lib copies pages ─► pageEdit.ts rewrites each page's conte
 
 | Layer | Where |
 |---|---|
-| Content object model (types) | `src/lib/content/types.ts` |
+| **Normalized layout model** (`LayoutChunk`, provider-agnostic) | `src/lib/layout/types.ts` |
+| Layout providers: local (default) and Adobe Extract via a backend (off unless configured), with fallback | `src/lib/layout/provider.ts`, `cache.ts` |
+| Adapters: analyzer → chunks, PDF.js text → chunks (fallback), Adobe JSON → chunks | `src/lib/layout/fromContent.ts`, `basic.ts`, `adobe.ts` |
+| Canonical coordinates: `pdfToCanvas` / `canvasToPdf` / `canvasToScreen` / `screenToCanvas` | `src/lib/coords.ts` |
+| Bounding boxes, inspector, object tree | `src/components/LayoutLayer.tsx`, `ObjectTreePanel.tsx` |
+| Content object model (analyzer output) | `src/lib/content/types.ts` |
 | Low-level extraction from PDF.js (CTM stack, text state, colours, paths, images, font names) | `src/lib/content/extract.ts` |
 | Content analyzer (lines, blocks, roles, columns, lists, tables, graphics, op ownership) | `src/lib/content/analyze.ts` |
 | Parse-once cache + idle prefetch | `src/lib/content/cache.ts` |
@@ -111,17 +124,20 @@ that object falls back to a cover filled with the sampled background colour. The
 
 `V` select · `E` edit · `T` add text · `Enter` edit the selected object · `Del` delete the selected object / text box /
 pages · `Esc` deselect · arrows nudge a selected text box · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
-`⌘/Ctrl+O` open · `⇧⌘D` debug view.
+`⌘/Ctrl+O` open · `B` bounding boxes · `⇧⌘D` debug view.
 
 ## Verification status
 
-Automated (`npm test`, 65 tests): analyzer on the 9-page layout suite and the fund sample (paragraphs, justification,
+Automated (`npm test`, 90 tests): layout model (canonical coordinates at every rotation, local adapter tree consistency,
+headings/levels, list grouping, table grid, Adobe adapter on a synthetic Extract sample incl. row/col spans, fallback);
+analyzer on the 9-page layout suite and the fund sample (paragraphs, justification,
 headings, two columns, lists, headers/footers, fonts/weights/colours, spans, lattice/rules/stream tables, multi-line cells,
 chart false-positive guard, graphics); **true removal** (edited paragraph/cell/heading text absent from the exported file,
 neighbours intact, moved rule/deleted rectangle/moved+resized image verified by re-analysing the export); model, undo/redo,
 drafts, page operations and export round-trips.
 
-Exercised by hand in Chromium: hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
+Exercised by hand in Chromium: bounding boxes, object tree (hover highlight, click-to-select), debug inspector on a
+page rotated 90°; hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
 debug view; edits on a rotated page; export → re-open in the app.
 
 **Not yet exercised:** OS file picker / drag-and-drop of real files, Firefox/Safari, and opening exports in

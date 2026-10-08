@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { AppContext, type AppCtx, type ObjectSelection, type Tool, type ToastKind, type ZoomState } from './context'
 import { EmptyState } from './components/EmptyState'
 import { Header } from './components/Header'
+import { ObjectTreePanel } from './components/ObjectTreePanel'
 import { InsertDialog, type InsertRequest } from './components/InsertDialog'
 import { PropertiesPanel } from './components/PropertiesPanel'
 import { StatusBar } from './components/StatusBar'
@@ -16,6 +17,8 @@ import { buildPdf } from './lib/export'
 import { rotateDelta } from './lib/geom'
 import { initialState, isDirty, isGraphic, isText, makePage, reducer } from './lib/model'
 import { prefetchContent } from './lib/content/cache'
+import { getActiveProvider, setActiveProvider } from './lib/layout/cache'
+import type { ProviderId } from './lib/layout/types'
 import { createLayoutSuite, LAYOUT_SUITE_NAME } from './lib/testDocs'
 import { getSourceBytes, LARGE_FILE_BYTES, openPdfBytes, openPdfFile, PdfError, releaseSource } from './lib/pdfjs'
 import { createSampleFund, SAMPLE_FUND_NAME } from './lib/samples'
@@ -24,6 +27,22 @@ const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.
 const isTyping = (t: EventTarget | null) => {
   const el = t as HTMLElement | null
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+}
+
+/** View toggles: `?debug` / `?boxes` / `?tree` in the URL, else remembered per browser (convenience only). */
+function readFlag(name: string): boolean {
+  try {
+    return new URLSearchParams(window.location.search).has(name) || localStorage.getItem(`toolbox.${name}`) === '1'
+  } catch {
+    return false
+  }
+}
+function writeFlag(name: string, v: boolean) {
+  try {
+    localStorage.setItem(`toolbox.${name}`, v ? '1' : '0')
+  } catch {
+    /* per-viewer convenience only */
+  }
 }
 
 export default function App() {
@@ -41,13 +60,11 @@ export default function App() {
   const [bannerDismissed, setBannerDismissed] = useState<string | null>(null)
   const [selectedObject, setSelectedObjectRaw] = useState<ObjectSelection | null>(null)
   const [editRequest, setEditRequest] = useState<AppCtx['editRequest']>(null)
-  const [debug, setDebug] = useState(() => {
-    try {
-      return new URLSearchParams(window.location.search).has('debug') || localStorage.getItem('toolbox.debug') === '1'
-    } catch {
-      return false
-    }
-  })
+  const [debug, setDebug] = useState(() => readFlag('debug'))
+  const [showBoxes, setShowBoxesRaw] = useState(() => readFlag('boxes'))
+  const [showTree, setShowTreeRaw] = useState(() => readFlag('tree'))
+  const [treeFocus, setTreeFocus] = useState<AppCtx['treeFocus']>(null)
+  const [layoutProvider, setLayoutProviderRaw] = useState<ProviderId>('local')
   const selectedObjectRef = useRef(selectedObject)
   selectedObjectRef.current = selectedObject
   const debugRef = useRef(debug)
@@ -88,11 +105,22 @@ export default function App() {
   const requestEdit = useCallback((pageId: string, objectId: string) => setEditRequest((r) => ({ pageId, objectId, nonce: (r?.nonce ?? 0) + 1 })), [])
   const toggleDebug = useCallback((v: boolean) => {
     setDebug(v)
-    try {
-      localStorage.setItem('toolbox.debug', v ? '1' : '0')
-    } catch {
-      /* per-viewer convenience only */
-    }
+    writeFlag('debug', v)
+  }, [])
+  const setShowBoxes = useCallback((v: boolean) => {
+    setShowBoxesRaw(v)
+    writeFlag('boxes', v)
+  }, [])
+  const setShowTree = useCallback((v: boolean) => {
+    setShowTreeRaw(v)
+    writeFlag('tree', v)
+    if (!v) setTreeFocus(null)
+  }, [])
+  const showBoxesRef = useRef(showBoxes)
+  showBoxesRef.current = showBoxes
+  const setLayoutProvider = useCallback((id: ProviderId) => {
+    setActiveProvider(id)
+    setLayoutProviderRaw(getActiveProvider().id)
   }, [])
 
   const setTool = useCallback((t: Tool) => {
@@ -298,10 +326,11 @@ export default function App() {
         const cur = s.pages[currentIndex]
         if (!(cur && s.sources[cur.sourceId].likelyScanned)) setTool('edit')
       } else if (e.key === 't' || e.key === 'T') setTool('add-text')
+      else if (e.key === 'b' || e.key === 'B') setShowBoxes(!showBoxesRef.current)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug])
+  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes])
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -364,6 +393,7 @@ export default function App() {
   const ctx: AppCtx = {
     state, dispatch, tool, setTool, zoom, setZoom, scale, setScale, currentIndex, setCurrentIndex, scrollToPage, scrollRequest, toast,
     selectedObject, setSelectedObject, editRequest, requestEdit, debug, setDebug: toggleDebug,
+    showBoxes, setShowBoxes, showTree, setShowTree, treeFocus, setTreeFocus, layoutProvider, setLayoutProvider,
   }
 
   const curSource = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId] : undefined
@@ -410,6 +440,7 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {showTree && <ObjectTreePanel />}
               <PropertiesPanel />
             </div>
           </>

@@ -1,21 +1,30 @@
-// Dev tool: node scripts/analyze-debug.ts [suite|fund|path.pdf] [page]
+// Dev tool: node scripts/analyze-debug.ts [suite|fund|path.pdf] [page] [--raw]
+// Prints the normalized layout tree (LayoutChunk) per page; --raw prints the analyzer objects instead.
 import { readFileSync } from 'node:fs'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { extractPage } from '../src/lib/content/extract.ts'
 import { analyzePage } from '../src/lib/content/analyze.ts'
 import { createLayoutSuite } from '../src/lib/testDocs.ts'
+import { layoutFromContent } from '../src/lib/layout/fromContent.ts'
+import { formatTree } from '../src/lib/layout/tree.ts'
 import { createSampleFund } from '../src/lib/samples.ts'
 
 const which = process.argv[2] ?? 'suite'
-const only = process.argv[3] ? Number(process.argv[3]) : null
+const args = process.argv.slice(3).filter((a) => !a.startsWith('--'))
+const raw = process.argv.includes('--raw')
+const only = args[0] ? Number(args[0]) : null
 const bytes = which === 'suite' ? await createLayoutSuite() : which === 'fund' ? await createSampleFund() : new Uint8Array(readFileSync(which))
 const doc = await pdfjs.getDocument({ data: bytes, verbosity: 0, fontExtraProperties: true, standardFontDataUrl: 'node_modules/pdfjs-dist/standard_fonts/' }).promise
 for (let n = 1; n <= doc.numPages; n += 1) {
   if (only && n !== only) continue
   const page = await doc.getPage(n)
-  const raw = await extractPage(page, pdfjs as never)
-  const c = analyzePage(raw)
-  console.log(`\n=== page ${n} [${c.kind}] ${JSON.stringify(c.stats)}  raw: ${raw.texts.length} items, ${raw.paths.length} paths, ${raw.images.length} images, ${raw.texts.filter((t) => !t.ops.length).length} items w/o ops`)
+  const rp = await extractPage(page, pdfjs as never)
+  const c = analyzePage(rp)
+  console.log(`\n=== page ${n} [${c.kind}] ${JSON.stringify(c.stats)}  raw: ${rp.texts.length} items, ${rp.paths.length} paths, ${rp.images.length} images, ${rp.texts.filter((t) => !t.ops.length).length} items w/o ops`)
+  if (!raw) {
+    console.log(formatTree(layoutFromContent(c, which, n - 1)))
+    continue
+  }
   const show = (id: string, depth: number) => {
     const o = c.objects[id]
     const b = o.bounds

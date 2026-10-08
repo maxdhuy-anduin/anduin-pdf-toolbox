@@ -1,5 +1,6 @@
 import { createContext, useContext, type Dispatch } from 'react'
 import type { Action, DocState } from './lib/model'
+import type { ProviderId } from './lib/layout/types'
 
 /** select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box */
 export type Tool = 'select' | 'edit' | 'add-text'
@@ -32,9 +33,21 @@ export interface AppCtx {
   /** Ask a page to start editing a detected object (Enter / double-click / panel button). */
   editRequest: { pageId: string; objectId: string; nonce: number } | null
   requestEdit: (pageId: string, objectId: string) => void
-  /** Developer view: outline every detected object. */
+  /** Developer view: outline every detected object, with an inspector. */
   debug: boolean
   setDebug: (v: boolean) => void
+  /** Subtle bounding boxes for detected layout objects. */
+  showBoxes: boolean
+  setShowBoxes: (v: boolean) => void
+  /** Object tree panel for the current page. */
+  showTree: boolean
+  setShowTree: (v: boolean) => void
+  /** Layout chunk highlighted from the object tree (hover or pinned). */
+  treeFocus: { pageId: string; chunkId: string; pinned: boolean } | null
+  setTreeFocus: (f: { pageId: string; chunkId: string; pinned: boolean } | null) => void
+  /** Bumped when the active layout provider changes. */
+  layoutProvider: ProviderId
+  setLayoutProvider: (id: ProviderId) => void
 }
 
 export const AppContext = createContext<AppCtx | null>(null)

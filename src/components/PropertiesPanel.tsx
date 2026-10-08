@@ -1,5 +1,6 @@
 import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, Italic, Minus, PencilLine, Plus, RotateCcw, Trash2, Underline } from 'lucide-react'
 import { useApp } from '../context'
+import { CHUNK_COLORS, CHUNK_LEGEND } from './LayoutLayer'
 import { unsupportedChars } from '../lib/fonts'
 import { FONT_LABELS, isGraphic, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
 import { getCachedContent } from '../lib/content/cache'
@@ -354,18 +355,9 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
-const LEGEND: [string, string][] = [
-  ['Text block', '#2563eb'],
-  ['Text line', '#16a34a'],
-  ['Table', '#9333ea'],
-  ['Table cell', '#eab308'],
-  ['Line / rule', '#dc2626'],
-  ['Rectangle', '#0891b2'],
-  ['Image', '#ea580c'],
-]
 
 function Overview({ currentIndex }: { currentIndex: number }) {
-  const { state, tool, debug } = useApp()
+  const { state, tool, debug, showBoxes } = useApp()
   const page = state.pages[currentIndex]
   const src = page ? state.sources[page.sourceId] : undefined
   const content = usePageContent(page?.sourceId ?? '', page?.srcIndex ?? 0, !!page && !src?.likelyScanned)
@@ -392,18 +384,20 @@ function Overview({ currentIndex }: { currentIndex: number }) {
           </div>
         </div>
       )}
-      {debug && (
+      {(debug || showBoxes) && (
         <div>
-          <Label>Detected objects legend</Label>
+          <Label>Bounding boxes legend</Label>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-            {LEGEND.map(([k, c]) => (
+            {CHUNK_LEGEND.map(([k, t]) => (
               <span key={k} className="flex items-center gap-2 text-[12px]">
-                <span className="h-2.5 w-2.5 border-2" style={{ borderColor: c }} />
+                <span className="h-2.5 w-2.5 border-2" style={{ borderColor: CHUNK_COLORS[t] }} />
                 {k}
               </span>
             ))}
           </div>
-          <p className="mt-2 text-[12px] text-muted">Hover the page to inspect an object. Toggle with ⇧⌘D.</p>
+          <p className="mt-2 text-[12px] text-muted">
+            {debug ? 'Hover the page to inspect an object (⇧⌘D to turn off). Dashed grey = already edited.' : 'Toggle boxes with B. ⋯ → Show detected objects adds lines, spans and an inspector.'}
+          </p>
         </div>
       )}
       <div>

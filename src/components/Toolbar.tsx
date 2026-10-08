@@ -1,6 +1,7 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, ListTree, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
+import { PROVIDERS } from '../lib/layout/provider'
 import { Divider, Menu, ToolBtn } from './ui'
 import { MAX_ZOOM, MIN_ZOOM } from './Viewer'
 
@@ -15,7 +16,7 @@ interface Props {
 }
 
 export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite }: Props) {
-  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug } = useApp()
+  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, showTree, setShowTree, layoutProvider, setLayoutProvider } = useApp()
   const n = state.pages.length
   const scanned = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId]?.likelyScanned : false
   const has = targetIds.length > 0
@@ -66,10 +67,24 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
         <ToolBtn iconOnly icon={<ZoomIn size={16} />} label="Zoom in" onClick={() => zoomBy(1)} disabled={scale >= MAX_ZOOM - 0.005} />
         <ToolBtn icon={<ScanLine size={16} />} label="Fit width" active={zoom.mode === 'fit'} onClick={() => setZoom({ mode: 'fit' })} />
         <Divider />
+        <ToolBtn icon={<SquareDashed size={16} />} label="Boxes" active={showBoxes} onClick={() => setShowBoxes(!showBoxes)} title="Show bounding boxes of detected objects (B)" />
+        <ToolBtn icon={<ListTree size={16} />} label="Tree" active={showTree} onClick={() => setShowTree(!showTree)} title="Show the object tree of the current page" />
         <Menu
           trigger={(toggle) => <ToolBtn iconOnly icon={<Ellipsis size={16} />} label="More options" onClick={toggle} active={debug} />}
           items={[
+            { label: 'View', heading: true },
+            { label: 'Show bounding boxes', hint: 'B', checked: showBoxes, onClick: () => setShowBoxes(!showBoxes) },
             { label: 'Show detected objects', hint: '⇧⌘D', checked: debug, onClick: () => setDebug(!debug) },
+            { label: 'Show object tree', checked: showTree, onClick: () => setShowTree(!showTree) },
+            { label: 'Layout engine', heading: true },
+            ...PROVIDERS.map((p) => ({
+              label: p.label,
+              hint: p.available() ? (p.processing === 'on-device' ? 'on-device' : 'backend') : 'not configured',
+              checked: layoutProvider === p.id,
+              disabled: !p.available(),
+              onClick: () => setLayoutProvider(p.id),
+            })),
+            { label: 'Developer', heading: true },
             { label: 'Open layout test suite', onClick: onOpenTestSuite },
           ]}
         />

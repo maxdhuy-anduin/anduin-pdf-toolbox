@@ -22,7 +22,7 @@ export function chunkTag(c: LayoutChunk): string {
       return `${c.cell?.header ? 'TH' : 'TD'}${s}`
     }
     case 'TEXT_LINE':
-      return 'LINE·TEXT'
+      return 'TEXT LINE'
     case 'TEXT_SPAN':
       return 'SPAN'
     case 'LINE':
@@ -46,12 +46,12 @@ export interface TreeRow {
   last: boolean[]
 }
 
-/** Depth-first rows in reading order; `maxDepth` hides lines/spans under blocks by default. */
+/** Depth-first rows in reading order; text lines/spans are hidden unless `includeTextLines`. */
 export function treeRows(page: LayoutPage, opts: { includeTextLines?: boolean } = {}): TreeRow[] {
   const rows: TreeRow[] = []
   const walk = (id: string, depth: number, last: boolean[]) => {
     rows.push({ id, depth, last })
-    const kids = page.chunks[id].children.filter((k) => opts.includeTextLines || (page.chunks[k].type !== 'TEXT_LINE' && page.chunks[k].type !== 'TEXT_SPAN') || page.chunks[id].type === 'TABLE_CELL')
+    const kids = page.chunks[id].children.filter((k) => opts.includeTextLines || (page.chunks[k].type !== 'TEXT_LINE' && page.chunks[k].type !== 'TEXT_SPAN'))
     kids.forEach((k, i) => walk(k, depth + 1, [...last, i === kids.length - 1]))
   }
   page.roots.forEach((id, i) => walk(id, 0, [i === page.roots.length - 1]))
