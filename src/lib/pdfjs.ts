@@ -46,6 +46,8 @@ export const getSourceBytes = (id: string): Uint8Array => {
   return r.bytes
 }
 
+export const getPageCount = (id: string): number => registry.get(id)?.pdf.numPages ?? 0
+
 export function getPdfPage(sourceId: string, index: number): Promise<PDFPageProxy> {
   const r = registry.get(sourceId)
   if (!r) return Promise.reject(new Error('Source document is no longer loaded.'))
@@ -98,6 +100,12 @@ async function looksScanned(pdf: PDFDocumentProxy): Promise<boolean> {
 }
 
 /** Opens a PDF from raw bytes and registers it. Throws PdfError with a user-presentable message. */
+/** Geometry of a PDF.js page in the app's terms (see lib/coords.ts). */
+export function pageInfoOf(page: PDFPageProxy): PageInfo {
+  const vp = page.getViewport({ scale: 1 })
+  return { view: page.view as PageInfo['view'], rotate: (((page.rotate % 360) + 360) % 360) as Rotation, width: vp.width, height: vp.height }
+}
+
 export async function openPdfBytes(name: string, input: Uint8Array): Promise<SourceMeta> {
   if (input.byteLength > MAX_FILE_BYTES) {
     throw new PdfError('too-large', `This file is ${(input.byteLength / 1048576).toFixed(0)} MB. Files above ${MAX_FILE_BYTES / 1048576} MB are not supported in the browser.`)
@@ -122,13 +130,7 @@ export async function openPdfBytes(name: string, input: Uint8Array): Promise<Sou
     const pages: PageInfo[] = []
     for (let i = 1; i <= pdf.numPages; i += 1) {
       const page = await pdf.getPage(i)
-      const vp = page.getViewport({ scale: 1 })
-      pages.push({
-        view: page.view as PageInfo['view'],
-        rotate: (((page.rotate % 360) + 360) % 360) as Rotation,
-        width: vp.width,
-        height: vp.height,
-      })
+      pages.push(pageInfoOf(page))
       page.cleanup()
     }
     if (pdf.numPages < 1) throw new PdfError('invalid', 'This PDF has no pages.')
