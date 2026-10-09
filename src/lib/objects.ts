@@ -7,7 +7,10 @@
 
 import { graphicOverlayFromObject, moveOverlayFor, sampleBox, sourceRef, textOverlayFromObject } from './content/edits'
 import type { Box, ContentObject, PageContent } from './content/types'
-import { isGraphic, isMove, isPaste, isText, pasteBounds, uid, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type SourceRef, type TextOverlay } from './model'
+import { isGraphic, isLine, isMove, isPaste, isText, lineBounds, pasteBounds, uid, type LineOverlay, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type SourceRef, type TextOverlay } from './model'
+
+/** Style for the next drawn line: the last one the user picked. */
+export const lineStyle: Pick<LineOverlay, 'color' | 'thickness' | 'dash'> = { color: '#141414', thickness: 1, dash: 'solid' }
 
 export interface Item {
   key: string
@@ -37,6 +40,8 @@ export function pageItems(content: PageContent | undefined, overlays: Overlay[],
     for (const id of content.hitOrder) {
       const obj = content.objects[id]
       if (!obj || !SELECTABLE.has(obj.type) || replaced.has(id)) continue
+      // an empty cell draws nothing: clicking it picks the table
+      if (obj.type === 'TABLE_CELL' && !obj.text?.trim()) continue
       const mv = moves.get(id)
       if (mv?.deleted) continue
       const b = obj.bounds
@@ -45,6 +50,7 @@ export function pageItems(content: PageContent | undefined, overlays: Overlay[],
   }
   for (const o of overlays) {
     if (isPaste(o)) items.push({ key: ovKey(o.id), overlay: o, bounds: pasteBounds(o) })
+    else if (isLine(o)) items.push({ key: ovKey(o.id), overlay: o, bounds: lineBounds(o) })
     else if (isGraphic(o) && !o.deleted) items.push({ key: ovKey(o.id), overlay: o, bounds: { x: o.x, y: o.y, w: o.w, h: o.h } })
     else if (isText(o) && o.text.trim()) {
       const m = measure?.(o.id)
@@ -57,22 +63,31 @@ export function pageItems(content: PageContent | undefined, overlays: Overlay[],
 
 const inBox = (b: Box, x: number, y: number, slop = 0) => x >= b.x - slop && x <= b.x + b.w + slop && y >= b.y - slop && y <= b.y + b.h + slop
 
-/** Item under a point (view space). Tables are picked on their outline; their inside belongs to cells. */
+/** Item under a point (view space); drawn lines by distance to the segment. */
 export function hitItem(items: Item[], x: number, y: number, slop: number): Item | null {
   for (const it of items) {
     const b = it.bounds
+    if (it.overlay && isLine(it.overlay)) {
+      if (distToSegment(it.overlay, x, y) <= Math.max(slop, it.overlay.thickness / 2 + slop / 2)) return it
+      continue
+    }
     if (it.obj?.type === 'LINE') {
       if (inBox(b, x, y, slop)) return it
       continue
     }
-    if (it.obj?.type === 'TABLE') {
-      const near = inBox(b, x, y, slop) && (Math.abs(x - b.x) < slop || Math.abs(x - b.x - b.w) < slop || Math.abs(y - b.y) < slop || Math.abs(y - b.y - b.h) < slop)
-      if (near) return it
-      continue
-    }
-    if (inBox(b, x, y)) return it
+    // tables come after their (smaller) text cells, so inside a table a cell with text wins and
+    // everything else (borders, empty cells, padding) picks the table
+    if (inBox(b, x, y, it.obj?.type === 'TABLE' ? slop : 0)) return it
   }
   return null
+}
+
+function distToSegment(l: LineOverlay, x: number, y: number) {
+  const dx = l.x2 - l.x1
+  const dy = l.y2 - l.y1
+  const len2 = dx * dx + dy * dy
+  const t = len2 ? Math.max(0, Math.min(1, ((x - l.x1) * dx + (y - l.y1) * dy) / len2)) : 0
+  return Math.hypot(x - (l.x1 + t * dx), y - (l.y1 + t * dy))
 }
 
 const intersects = (a: Box, b: Box) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
@@ -157,6 +172,7 @@ export function planMove(page: PageModel, content: PageContent | undefined, keys
         res.update.push({ id: mv.id, patch: { dx: mv.dx + dx, dy: mv.dy + dy } })
         continue
       }
+      if (!o.ops.length && o.type !== 'TABLE') continue // draws nothing (e.g. an empty cell)
       const ref = sourceRef(o)
       if (ref.exclusive) {
         res.add.push(moveOverlayFor(o, { dx, dy, coverColor: coverColorFor(canvas, content, o.bounds) }))
@@ -182,6 +198,7 @@ export function planMove(page: PageModel, content: PageContent | undefined, keys
     const o = page.overlays.find((x) => x.id === id)
     if (!o) continue
     if (isPaste(o) || isMove(o)) res.update.push({ id, patch: { dx: o.dx + dx, dy: o.dy + dy } })
+    else if (isLine(o)) res.update.push({ id, patch: { x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy } })
     else if (isText(o) || isGraphic(o)) res.update.push({ id, patch: { x: o.x + dx, y: o.y + dy } })
   }
   return res
@@ -200,6 +217,7 @@ export function planDelete(page: PageModel, content: PageContent | undefined, ke
         res.update.push({ id: mv.id, patch: { deleted: true } })
         continue
       }
+      if (!o.ops.length && o.type !== 'TABLE') continue
       if (sourceRef(o).exclusive) {
         res.add.push(moveOverlayFor(o, { deleted: true, coverColor: coverColorFor(canvas, content, o.bounds) }))
       } else if (o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL') {
@@ -246,6 +264,8 @@ export interface CopiedSelection {
   groups: CopiedGroup[]
   /** Text boxes, positioned relative to the selection's top-left. */
   texts: TextOverlay[]
+  /** Drawn lines, relative to the selection's top-left. */
+  lines: LineOverlay[]
 }
 
 /** Captures the selection with positions normalized to its top-left corner. Synchronous (no PDF work). */
@@ -265,6 +285,7 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
     return g
   }
   const texts: TextOverlay[] = []
+  const drawn: LineOverlay[] = []
   const lines: string[] = []
   const { objIds, ovIds } = split(keys)
   const moves = new Map(page.overlays.filter(isMove).map((m) => [m.source.objectId, m]))
@@ -275,6 +296,7 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
       seen.add(id)
       const o = content.objects[id]
       const mv = moves.get(id)
+      if (!o.ops.length && o.type !== 'TABLE') continue
       const ref = sourceRef(o)
       if (ref.exclusive) group(page.sourceId, page.srcIndex, mv?.dx ?? 0, mv?.dy ?? 0).items.push(ref)
       else if (o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL') {
@@ -299,8 +321,10 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
     } else if (isText(o) && o.text.trim()) {
       texts.push({ ...o, id: uid('tx'), x: o.x - origin.x, y: o.y - origin.y, cover: undefined, source: undefined })
       lines.push(o.text)
+    } else if (isLine(o)) {
+      drawn.push({ ...o, id: uid('ln'), x1: o.x1 - origin.x, y1: o.y1 - origin.y, x2: o.x2 - origin.x, y2: o.y2 - origin.y })
     }
   }
-  if (!groups.size && !texts.length) return null
-  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts }
+  if (!groups.size && !texts.length && !drawn.length) return null
+  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts, lines: drawn }
 }

@@ -170,7 +170,7 @@ export function TextBox({ overlay: o, scale, rotation, selected, editing, caretA
           background: editing ? 'rgba(255,255,255,0.0)' : undefined,
           userSelect: editing ? 'text' : 'none',
         }}
-        data-empty={o.text === '' ? 'true' : 'false'}
+        data-empty={editing && o.text === '' ? 'true' : 'false'}
         data-placeholder="Type here"
         contentEditable={editing ? 'plaintext-only' : false}
         suppressContentEditableWarning

@@ -32,7 +32,10 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
    Grab a table by its border and drag it: rules, cells and fills move as one, drawn exactly as before.
    Drag across empty space to select several objects (or Shift-click), then drag one of them: they move together.
    ⌘C / ⌘V duplicates them (+20 pt); open another PDF in a second browser tab and ⌘V pastes them there.
-6. **Add Text** (T) → click the page, type a correction; make it bold in the right panel.
+6. **Add Text** (T) → click the page, type a correction; make it bold in the right panel. This is the only way to add
+   text: empty table cells are not treated as fields (clicking one selects its table).
+   **Add Line** (L) → drag on the page (Shift = straight / 45°); set colour, thickness and solid / dashed / dotted in the
+   panel, drag its end points to adjust. Lines move, copy and paste like everything else.
 7. **Organize** (grid icon in the toolbar): all pages as a grid. Drag pages (or a selection) anywhere to reorder; type
    `1-3, 5` in the range box to select; **Extract** takes the selection or any range (`8-`, `odd`, `last`…) into a new PDF,
    optionally one file per page and/or removing them from this document. Rotate, duplicate, delete, insert. **Done** or Esc
@@ -144,14 +147,15 @@ that object falls back to a cover filled with the sampled background colour. The
 
 ## Shortcuts
 
-`V` select · `E` edit · `T` add text · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
+`V` select · `E` edit · `T` add text · `L` add line · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
 on the page, `⌘/Ctrl+C` `X` `V` copy / cut / paste, arrows nudge the selection (`Shift` = 10 pt) · `Enter` edit the selected
 object · `Del` delete the selected objects / text box / pages · `Esc` deselect · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
 `⌘/Ctrl+O` open · Organize: `⌘/Ctrl+A` select all pages, `Del` delete, `Esc` clear selection / back · `B` bounding boxes · `⇧⌘D` debug view.
 
 ## Verification status
 
-Automated (`npm test`, 100 tests): page-range parsing; rigid moves (whole ruled table moved: same cell text, font and size at the new place,
+Automated (`npm test`, 102 tests): moving/deleting tables with empty cells creates no text boxes; drawn lines export as
+vector lines; page-range parsing; rigid moves (whole ruled table moved: same cell text, font and size at the new place,
 nothing left behind; paragraph moved + another deleted; table deleted completely), paste from another page (original font,
 only the copied object), marquee rules, group move in one undo step, clipboard positions relative to the selection; layout model (canonical coordinates at every rotation, local adapter tree consistency,
 headings/levels, list grouping, table grid, Adobe adapter on a synthetic Extract sample incl. row/col spans, fallback);

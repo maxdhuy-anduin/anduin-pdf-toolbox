@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useApp } from '../context'
 import { clamp, rotateDelta, screenToLocal } from '../lib/geom'
-import { isGraphic, isMove, isPaste, isText, makeTextOverlay, type Overlay, type OverlayPatch, type PageInfo, type PageModel, type TextOverlay } from '../lib/model'
+import { isGraphic, isLine, isMove, isPaste, isText, makeLineOverlay, makeTextOverlay, type LineOverlay, type Overlay, type OverlayPatch, type PageInfo, type PageModel, type TextOverlay } from '../lib/model'
 import { getCachedContent, getPageContent, onContentAnalyzed } from '../lib/content/cache'
 import {
   describeObject, graphicOverlayFromObject, imageSnapshots, isGraphicObject, isTextObject, OBJECT_LABEL, snapshotRegion, textOverlayFromObject,
 } from '../lib/content/edits'
 import type { Box, ContentObject, PageContent } from '../lib/content/types'
-import { groupBounds, hitItem, marqueeSelect, pageItems, planDelete, planMove, type Item, type OverlayEdits } from '../lib/objects'
+import { groupBounds, hitItem, lineStyle, marqueeSelect, pageItems, planDelete, planMove, type Item, type OverlayEdits } from '../lib/objects'
 import { GraphicBox } from './GraphicBox'
 import { TextBox } from './TextBox'
 
@@ -52,6 +52,7 @@ function itemLabel(it: Item): string {
   const o = it.overlay!
   if (isPaste(o)) return o.items.length > 1 ? `Pasted · ${o.items.length} objects` : `Pasted ${OBJECT_LABEL[o.items[0]?.objType]?.toLowerCase() ?? 'content'}`
   if (isText(o)) return o.source ? 'Edited text' : 'Text box'
+  if (isLine(o)) return 'Line'
   if (isGraphic(o)) return OBJECT_LABEL[o.source.objType] ?? 'Graphic'
   return 'Object'
 }
@@ -68,6 +69,9 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   const [hover, setHover] = useState<string | null>(null)
   const [drag, setDrag] = useState<{ dx: number; dy: number; ghosts: { key: string; b: Box; src: string | null }[] } | null>(null)
   const [marquee, setMarquee] = useState<Box | null>(null)
+  /** Line being drawn (Add Line) or an endpoint of a selected line being dragged. */
+  const [drawing, setDrawing] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [endDrag, setEndDrag] = useState<{ id: string; end: 1 | 2; x: number; y: number } | null>(null)
   const content = usePageContent(page.sourceId, page.srcIndex, tool === 'edit')
 
   const draft = state.draft && state.draft.pageId === page.id ? state.draft : null
@@ -211,6 +215,13 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || e.target !== e.currentTarget) return
     if (tool === 'add-text') return onAddText(e)
+    if (tool === 'add-line') {
+      e.preventDefault()
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      const p = local(e)
+      setDrawing({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
+      return
+    }
     if (tool !== 'edit') return
     const p = local(e)
     const it = hitItem(items, p.x, p.y, 4 / scale)
@@ -233,6 +244,11 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (drawing) {
+      const p = snapEnd(drawing.x1, drawing.y1, local(e), e.shiftKey)
+      setDrawing({ ...drawing, x2: p.x, y2: p.y })
+      return
+    }
     if (tool !== 'edit') return
     const pr = pressRef.current
     if (pr?.mode === 'marquee') {
@@ -245,7 +261,11 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
       const d = rotateDelta(e.clientX - pr.sx, e.clientY - pr.sy, page.rotation)
       if (!pr.moved) {
         pr.moved = true
-        const ghosts = pr.keys.map((k) => itemByKey.get(k)).filter((x): x is Item => !!x).map((it) => ({ key: it.key, b: it.bounds, src: snapshotAt(it.bounds) }))
+        // drawn lines follow the drag themselves (SVG); everything else gets a snapshot
+        const ghosts = pr.keys
+          .map((k) => itemByKey.get(k))
+          .filter((x): x is Item => !!x && !(x.overlay && isLine(x.overlay)))
+          .map((it) => ({ key: it.key, b: it.bounds, src: snapshotAt(it.bounds) }))
         setDrag({ dx: d.x / scale, dy: d.y / scale, ghosts })
         return
       }
@@ -257,6 +277,16 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
+    if (drawing) {
+      const d = drawing
+      setDrawing(null)
+      if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < 3) return
+      const line = makeLineOverlay(d.x1, d.y1, d.x2, d.y2, lineStyle)
+      dispatch({ type: 'editOverlays', pageId: page.id, add: [line] })
+      setTool('edit')
+      setObjSel({ pageId: page.id, keys: [`v:${line.id}`] })
+      return
+    }
     const pr = pressRef.current
     pressRef.current = null
     if (!pr) return
@@ -347,6 +377,25 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
     setSelectedObject(null)
   }
 
+  // ---- endpoints of a selected drawn line -------------------------------------------------
+  const onEndDown = (e: React.PointerEvent, l: LineOverlay, end: 1 | 2) => {
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    setEndDrag({ id: l.id, end, x: end === 1 ? l.x1 : l.x2, y: end === 1 ? l.y1 : l.y2 })
+  }
+  const onEndMove = (e: React.PointerEvent, l: LineOverlay) => {
+    if (!endDrag) return
+    const [ax, ay] = endDrag.end === 1 ? [l.x2, l.y2] : [l.x1, l.y1]
+    const p = snapEnd(ax, ay, local(e), e.shiftKey)
+    setEndDrag({ ...endDrag, x: p.x, y: p.y })
+  }
+  const onEndUp = () => {
+    if (!endDrag) return
+    update(endDrag.id, endDrag.end === 1 ? { x1: endDrag.x, y1: endDrag.y } : { x2: endDrag.x, y2: endDrag.y })
+    setEndDrag(null)
+  }
+
   // ---- add text -----------------------------------------------------------------------
   const onAddText = (e: React.PointerEvent) => {
     e.preventDefault()
@@ -400,6 +449,17 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
         ))}
       </div>
 
+      {/* lines drawn with Add Line */}
+      <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" style={{ zIndex: 3 }}>
+        {overlays.filter(isLine).map((o) => {
+          const moving = drag && selSet.has(`v:${o.id}`)
+          let l = moving ? { ...o, x1: o.x1 + drag.dx, y1: o.y1 + drag.dy, x2: o.x2 + drag.dx, y2: o.y2 + drag.dy } : o
+          if (endDrag?.id === o.id) l = endDrag.end === 1 ? { ...l, x1: endDrag.x, y1: endDrag.y } : { ...l, x2: endDrag.x, y2: endDrag.y }
+          return <LineSvg key={o.id} l={l} scale={scale} />
+        })}
+        {drawing && <LineSvg l={{ ...lineStyle, ...drawing }} scale={scale} />}
+      </svg>
+
       {/* Edit mode: hover / select / marquee / drag over cached geometry */}
       <div
         ref={layerRef}
@@ -408,8 +468,8 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
         className="absolute inset-0"
         style={{
           zIndex: 4,
-          pointerEvents: tool === 'edit' || tool === 'add-text' ? 'auto' : 'none',
-          cursor: tool === 'add-text' ? 'text' : drag ? 'grabbing' : hovered || (hover && selSet.has(hover)) ? 'move' : undefined,
+          pointerEvents: tool === 'edit' || tool === 'add-text' || tool === 'add-line' ? 'auto' : 'none',
+          cursor: tool === 'add-text' ? 'text' : tool === 'add-line' ? 'crosshair' : drag ? 'grabbing' : hovered || (hover && selSet.has(hover)) ? 'move' : undefined,
           touchAction: 'none',
         }}
         onPointerDownCapture={onPointerDownCapture}
@@ -464,6 +524,23 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
               </div>
             ))}
             {marquee && <div className="pointer-events-none absolute" style={{ ...S(marquee), outline: '1px dashed #1075dc', background: 'rgba(63,166,238,0.08)' }} />}
+            {single?.overlay && isLine(single.overlay) && !drag &&
+              ([1, 2] as const).map((end) => {
+                const l = single.overlay as LineOverlay
+                const live = endDrag?.id === l.id && endDrag.end === end
+                const x = live ? endDrag.x : end === 1 ? l.x1 : l.x2
+                const y = live ? endDrag.y : end === 1 ? l.y1 : l.y2
+                return (
+                  <div
+                    key={end}
+                    className="handle"
+                    style={{ left: x * scale - 4, top: y * scale - 4, cursor: 'crosshair' }}
+                    onPointerDown={(e) => onEndDown(e, l, end)}
+                    onPointerMove={(e) => onEndMove(e, l)}
+                    onPointerUp={onEndUp}
+                  />
+                )
+              })}
           </>
         )}
         {overlays.filter(isText).map((o) => (
@@ -491,5 +568,31 @@ function Tag({ text, style, dark }: { text: string; style: React.CSSProperties; 
     <div className={`pointer-events-none absolute z-10 whitespace-nowrap px-1.5 py-[1px] font-mono text-[10px] font-medium uppercase tracking-wide text-white ${dark ? 'bg-sky-deep' : 'bg-sky'}`} style={style}>
       {text}
     </div>
+  )
+}
+
+/** Shift snaps a line to 0° / 45° / 90°. */
+function snapEnd(x0: number, y0: number, p: { x: number; y: number }, snap: boolean) {
+  if (!snap) return p
+  const dx = p.x - x0
+  const dy = p.y - y0
+  const len = Math.hypot(dx, dy)
+  const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4)
+  return { x: x0 + len * Math.cos(a), y: y0 + len * Math.sin(a) }
+}
+
+function LineSvg({ l, scale }: { l: Pick<LineOverlay, 'x1' | 'y1' | 'x2' | 'y2' | 'color' | 'thickness' | 'dash'>; scale: number }) {
+  const t = Math.max(0.5, l.thickness * scale)
+  return (
+    <line
+      x1={l.x1 * scale}
+      y1={l.y1 * scale}
+      x2={l.x2 * scale}
+      y2={l.y2 * scale}
+      stroke={l.color}
+      strokeWidth={t}
+      strokeDasharray={l.dash === 'dashed' ? `${4 * t} ${3 * t}` : l.dash === 'dotted' ? `0 ${2.5 * t}` : undefined}
+      strokeLinecap={l.dash === 'dotted' ? 'round' : 'butt'}
+    />
   )
 }

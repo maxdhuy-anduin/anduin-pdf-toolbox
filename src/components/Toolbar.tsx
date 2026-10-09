@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, Slash, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
 import { PROVIDERS } from '../lib/layout/provider'
@@ -36,6 +36,7 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
       {toolBtn('select', <MousePointer2 size={16} />, 'Select', 'V')}
       {toolBtn('edit', <PencilLine size={16} />, 'Edit', 'E', !!scanned, scanned ? 'Editing is unavailable: this page appears to be scanned/image-based' : 'Edit PDF content: paragraphs, tables, lines and images (E)')}
       {toolBtn('add-text', <Type size={16} />, 'Add Text', 'T')}
+      {toolBtn('add-line', <Slash size={16} />, 'Add Line', 'L', false, 'Draw a line: drag on the page, hold Shift for straight / 45° (L)')}
       <Divider />
       <ToolBtn icon={<LayoutGrid size={16} />} label="Organize" onClick={onOrganize} title="Organize pages: reorder by drag and drop, extract ranges, rotate, delete" />
       <ToolBtn icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />

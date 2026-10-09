@@ -113,7 +113,8 @@ export function snapshotRegion(canvas: HTMLCanvasElement | null | undefined, pag
   }
 }
 
-export const isTextObject = (o: ContentObject) => o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL'
+/** Text that exists in the PDF (empty table cells are not text fields: use Add Text to put something there). */
+export const isTextObject = (o: ContentObject) => (o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL') && !!o.text?.trim()
 export const isGraphicObject = (o: ContentObject) => o.type === 'LINE' || o.type === 'RECTANGLE' || o.type === 'IMAGE'
 
 export const OBJECT_LABEL: Record<string, string> = {

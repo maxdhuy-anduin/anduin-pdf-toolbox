@@ -2,12 +2,13 @@ import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, C
 import { useApp } from '../context'
 import { CHUNK_COLORS, CHUNK_LEGEND } from './LayoutLayer'
 import { unsupportedChars } from '../lib/fonts'
-import { FONT_LABELS, isGraphic, isText, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
+import { FONT_LABELS, isGraphic, isLine, isText, type DocState, type LineOverlay, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
 import { getCachedContent } from '../lib/content/cache'
 import { describeObject, isGraphicObject, isTextObject, OBJECT_LABEL } from '../lib/content/edits'
 import type { ContentObject, PageContent } from '../lib/content/types'
 import { Button, Eyebrow } from './ui'
 import { usePageContent } from './PageOverlays'
+import { lineStyle } from '../lib/objects'
 
 const SWATCHES = ['#141414', '#162950', '#1075dc', '#c2412a', '#15803d', '#858585']
 
@@ -27,6 +28,61 @@ function Seg({ active, onClick, label, children }: { active?: boolean; onClick: 
 }
 
 const Label = ({ children }: { children: React.ReactNode }) => <span className="mb-1.5 block font-mono text-[10.5px] uppercase tracking-[0.06em] text-muted">{children}</span>
+const singleLine = (state: DocState, sel: { pageId: string; keys: string[] }) => {
+  const o = state.pages.find((p) => p.id === sel.pageId)?.overlays.find((x) => `v:${x.id}` === sel.keys[0])
+  return o && isLine(o) ? o : null
+}
+
+/** A line drawn with Add Line. Style changes also become the default for the next line. */
+function LineProps({ line: o, pageId }: { line: LineOverlay; pageId: string }) {
+  const { dispatch } = useApp()
+  const set = (patch: OverlayPatch, prop: string) => {
+    Object.assign(lineStyle, patch)
+    dispatch({ type: 'updateOverlay', pageId, overlayId: o.id, patch, coalesce: `fmt:${o.id}:${prop}` })
+  }
+  const len = Math.hypot(o.x2 - o.x1, o.y2 - o.y1)
+  const angle = Math.round((Math.atan2(o.y1 - o.y2, o.x2 - o.x1) * 180) / Math.PI)
+  return (
+    <div className="space-y-4 p-4 text-[13px]" data-keep-selection>
+      <ColorField label="Colour" value={o.color} onChange={(c) => set({ color: c }, 'color')} />
+      <div>
+        <Label>Thickness</Label>
+        <div className="flex flex-wrap gap-1">
+          {[0.5, 1, 1.5, 2, 3, 4].map((t) => (
+            <button key={t} type="button" onClick={() => set({ thickness: t }, 'thick')} className={`flex h-8 w-11 items-center justify-center border text-[11.5px] tabular-nums ${o.thickness === t ? 'border-ink bg-ink text-white' : 'border-line hover:border-ink'}`}>
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <Label>Style</Label>
+        <div className="flex gap-1">
+          {(['solid', 'dashed', 'dotted'] as const).map((d) => (
+            <button key={d} type="button" onClick={() => set({ dash: d }, 'dash')} aria-label={d} className={`flex h-8 flex-1 items-center justify-center border ${o.dash === d ? 'border-ink bg-ink' : 'border-line hover:border-ink'}`}>
+              <svg width="44" height="6">
+                <line x1="2" y1="3" x2="42" y2="3" stroke={o.dash === d ? '#fff' : '#141414'} strokeWidth="2" strokeDasharray={d === 'dashed' ? '8 6' : d === 'dotted' ? '0 5' : undefined} strokeLinecap={d === 'dotted' ? 'round' : 'butt'} />
+              </svg>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <Row k="Length" v={`${len.toFixed(1)} pt`} />
+        <Row k="Angle" v={`${angle}°`} />
+      </div>
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <Button variant="danger" onClick={() => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op: 'delete' } }))}>
+          <Trash2 size={14} />
+          Delete line
+          <span className="ml-auto font-mono text-[10.5px] opacity-70">DEL</span>
+        </Button>
+      </div>
+      <p className="text-[12px] leading-relaxed text-muted">Drag the line to move it, or its end points to change it (Shift = straight / 45°). Arrow keys nudge.</p>
+    </div>
+  )
+}
+
 /** Several selected objects (or a pasted block): what can be done to them as a group. */
 function SelectionProps({ pageId, keys }: { pageId: string; keys: string[] }) {
   const { state } = useApp()
@@ -36,9 +92,7 @@ function SelectionProps({ pageId, keys }: { pageId: string; keys: string[] }) {
   for (const k of keys) {
     const label = k.startsWith('o:')
       ? (content?.objects[k.slice(2)] ? describeObject(content.objects[k.slice(2)]).split(' · ')[0] : 'Object')
-      : page?.overlays.find((o) => o.id === k.slice(2))?.type === 'paste'
-        ? 'Pasted block'
-        : 'Text box'
+      : ({ paste: 'Pasted block', line: 'Line' } as Record<string, string>)[page?.overlays.find((o) => o.id === k.slice(2))?.type ?? ''] ?? 'Text box'
     counts.set(label, (counts.get(label) ?? 0) + 1)
   }
   const send = (op: string) => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op } }))
@@ -93,6 +147,9 @@ export function PropertiesPanel() {
   } else if (overlay && page && isText(overlay)) {
     title = overlay.source ? 'Edited text' : 'Text box'
     body = <TextProps overlay={overlay} pageId={page.id} isDraft={isDraft} />
+  } else if (objSel && objSel.keys.length === 1 && singleLine(state, objSel)) {
+    title = 'Line'
+    body = <LineProps line={singleLine(state, objSel)!} pageId={objSel.pageId} />
   } else if (objSel && (objSel.keys.length > 1 || objSel.keys[0]?.startsWith('v:'))) {
     title = objSel.keys.length > 1 ? `${objSel.keys.length} objects` : 'Pasted content'
     body = <SelectionProps pageId={objSel.pageId} keys={objSel.keys} />

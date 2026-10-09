@@ -408,6 +408,7 @@ export default function App() {
         const cur = s.pages[currentIndex]
         if (!(cur && s.sources[cur.sourceId].likelyScanned)) setTool('edit')
       } else if (e.key === 't' || e.key === 'T') setTool('add-text')
+      else if (e.key === 'l' || e.key === 'L') setTool('add-line')
       else if (e.key === 'b' || e.key === 'B') setShowBoxes(!showBoxesRef.current)
     }
     window.addEventListener('keydown', onKey)
@@ -516,6 +517,7 @@ export default function App() {
           add.push({ id: uid('paste'), type: 'paste', sourceId, srcIndex, items: g.items, dx: g.shift.x + tx, dy: g.shift.y + ty })
         }
         for (const t of sel.texts) add.push({ ...t, id: uid('tx'), x: t.x + tx, y: t.y + ty })
+        for (const l of sel.lines ?? []) add.push({ ...l, id: uid('ln'), x1: l.x1 + tx, y1: l.y1 + ty, x2: l.x2 + tx, y2: l.y2 + ty })
         dispatch({ type: 'editOverlays', pageId: page.id, add })
         setObjSel({ pageId: page.id, keys: add.map((o) => `v:${o.id}`) })
         if (!samePage) toast('success', `Pasted ${add.length > 1 ? `${add.length} blocks` : 'content'} on page ${currentIndexRef.current + 1}.`)
@@ -644,8 +646,8 @@ export default function App() {
                 <Viewer />
                 {tool !== 'select' && (
                   <div className="pointer-events-none absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lg">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{tool === 'add-text' ? 'Add text' : 'Edit'}</span>
-                    {tool === 'add-text' ? 'Click on a page to place a text box · Esc to cancel' : 'Drag to move · drag empty space or Shift-click to select several · ⌘C ⌘V · double-click text to edit'}
+                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{tool === 'add-text' ? 'Add text' : tool === 'add-line' ? 'Add line' : 'Edit'}</span>
+                    {tool === 'add-text' ? 'Click on a page to place a text box · Esc to cancel' : tool === 'add-line' ? 'Drag on a page to draw a line · Shift = straight / 45° · Esc to cancel' : 'Drag to move · drag empty space or Shift-click to select several · ⌘C ⌘V · double-click text to edit'}
                   </div>
                 )}
               </div>

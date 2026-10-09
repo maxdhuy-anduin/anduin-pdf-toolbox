@@ -2,8 +2,8 @@ import { createContext, useContext, type Dispatch } from 'react'
 import type { Action, DocState } from './lib/model'
 import type { ProviderId } from './lib/layout/types'
 
-/** select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box */
-export type Tool = 'select' | 'edit' | 'add-text'
+/** select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box · add-line = draw a line */
+export type Tool = 'select' | 'edit' | 'add-text' | 'add-line'
 export type ZoomState = { mode: 'fit' } | { mode: 'custom'; value: number }
 export type ToastKind = 'info' | 'success' | 'warning' | 'error'
 

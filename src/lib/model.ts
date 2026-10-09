@@ -137,11 +137,37 @@ export interface PasteOverlay {
   source?: undefined
 }
 
-export type Overlay = TextOverlay | GraphicOverlay | MoveOverlay | PasteOverlay
+/** A line drawn by the user (Add Line). View space. */
+export interface LineOverlay {
+  id: string
+  type: 'line'
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  color: string
+  thickness: number
+  dash: 'solid' | 'dashed' | 'dotted'
+  source?: undefined
+}
+
+export type Overlay = TextOverlay | GraphicOverlay | MoveOverlay | PasteOverlay | LineOverlay
 export const isText = (o: Overlay): o is TextOverlay => o.type === 'text'
 export const isGraphic = (o: Overlay): o is GraphicOverlay => o.type === 'graphic'
 export const isMove = (o: Overlay): o is MoveOverlay => o.type === 'move'
 export const isPaste = (o: Overlay): o is PasteOverlay => o.type === 'paste'
+export const isLine = (o: Overlay): o is LineOverlay => o.type === 'line'
+
+export function lineBounds(o: Pick<LineOverlay, 'x1' | 'y1' | 'x2' | 'y2' | 'thickness'>) {
+  const pad = o.thickness / 2
+  const x = Math.min(o.x1, o.x2) - pad
+  const y = Math.min(o.y1, o.y2) - pad
+  return { x, y, w: Math.abs(o.x2 - o.x1) + 2 * pad, h: Math.abs(o.y2 - o.y1) + 2 * pad }
+}
+
+export function makeLineOverlay(x1: number, y1: number, x2: number, y2: number, style: Partial<Pick<LineOverlay, 'color' | 'thickness' | 'dash'>> = {}): LineOverlay {
+  return { id: uid('ln'), type: 'line', x1, y1, x2, y2, color: '#141414', thickness: 1, dash: 'solid', ...style }
+}
 
 /** Union of item bounds of a pasted block, at its pasted position. */
 export function pasteBounds(o: PasteOverlay) {
@@ -330,7 +356,8 @@ export type Action =
 export type OverlayPatch = Partial<Omit<TextOverlay, 'type' | 'id'>> &
   Partial<Omit<GraphicOverlay, 'type' | 'id'>> &
   Partial<Omit<MoveOverlay, 'type' | 'id'>> &
-  Partial<Omit<PasteOverlay, 'type' | 'id' | 'source'>>
+  Partial<Omit<PasteOverlay, 'type' | 'id' | 'source'>> &
+  Partial<Omit<LineOverlay, 'type' | 'id' | 'source'>>
 
 const MAX_HISTORY = 100
 const COALESCE_MS = 1200

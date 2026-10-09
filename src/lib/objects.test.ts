@@ -160,3 +160,33 @@ describe('selection model', () => {
     expect(sel.text).toContain(paras[0].text!.slice(0, 20))
   })
 })
+
+describe('no automatic text fields', () => {
+  it('moving or deleting any table never creates text boxes (empty cells are skipped)', async () => {
+    const { planMove, planDelete } = await import('./objects')
+    for (let i = 0; i < 9; i += 1) {
+      const c = structuredClone(await analyze(suite, i))
+      // blank out every other cell, like a form table with empty fields
+      of(c, (o) => o.type === 'TABLE_CELL').forEach((cell, k) => {
+        if (k % 2) Object.assign(cell, { text: '', ops: [], opsExclusive: false, children: [], sourceItems: [] })
+      })
+      for (const t of of(c, (o) => o.type === 'TABLE')) {
+        const page = makePage('suite', i)
+        for (const r of [planMove(page, c, [`o:${t.id}`], 5, 5), planDelete(page, c, [`o:${t.id}`])]) {
+          expect(r.add.filter((o) => o.type === 'text')).toEqual([])
+        }
+      }
+    }
+  })
+
+  it('exports drawn lines as vector lines', async () => {
+    const { makeLineOverlay } = await import('./model')
+    const { bytes } = await exportPages([{ index: 0, overlays: [makeLineOverlay(72, 700, 300, 700, { thickness: 2, color: '#ef6445' }), makeLineOverlay(72, 720, 300, 720, { dash: 'dashed' })] }])
+    const after = await analyze(bytes, 0)
+    const rules = of(after, (o) => o.type === 'LINE' && Math.abs(o.bounds.y + o.bounds.h / 2 - 700) < 2)
+    expect(rules).toHaveLength(1)
+    expect(rules[0].bounds.x).toBeCloseTo(72, 0)
+    expect(rules[0].bounds.w).toBeCloseTo(228, 0)
+    expect(rules[0].strokeColor).toBe('#ef6445')
+  })
+})

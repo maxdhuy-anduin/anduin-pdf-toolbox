@@ -1,7 +1,7 @@
-import { PDFDocument, StandardFonts, concatTransformationMatrix, degrees, drawObject, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { LineCapStyle, PDFDocument, StandardFonts, concatTransformationMatrix, degrees, drawObject, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { BASELINE_RATIO, canvasToPdf, pdfToCanvas, viewRectToUser, viewToUser } from './coords'
 import { editPageContent, keepOnly, type EditTarget, type UserRect } from './pdf/pageEdit'
-import { LINE_HEIGHT, isGraphic, isMove, isPaste, isText, type PageInfo, type PageModel, type SourceMeta, type SourceRef, type TextOverlay } from './model'
+import { LINE_HEIGHT, isGraphic, isLine, isMove, isPaste, isText, type PageInfo, type PageModel, type SourceMeta, type SourceRef, type TextOverlay } from './model'
 
 export type BytesGetter = (sourceId: string) => Uint8Array
 
@@ -264,6 +264,22 @@ export async function buildPdf(
           borderWidth: o.strokeColor ? o.thickness : 0,
         })
       }
+    }
+
+    // lines drawn with Add Line
+    for (const o of model.overlays) {
+      if (!isLine(o)) continue
+      const a = viewToUser(info, o.x1, o.y1)
+      const b = viewToUser(info, o.x2, o.y2)
+      const t = o.thickness
+      page.drawLine({
+        start: { x: a.x, y: a.y },
+        end: { x: b.x, y: b.y },
+        thickness: t,
+        color: hexToRgb(o.color),
+        dashArray: o.dash === 'dashed' ? [4 * t, 3 * t] : o.dash === 'dotted' ? [0, 2.5 * t] : undefined,
+        lineCap: o.dash === 'dotted' ? LineCapStyle.Round : LineCapStyle.Butt,
+      })
     }
 
     for (const o of model.overlays) {
