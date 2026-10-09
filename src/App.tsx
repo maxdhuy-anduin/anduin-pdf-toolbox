@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { AppContext, type AppCtx, type ObjectSelection, type ObjectsSelection, type Tool, type ToastKind, type ZoomState } from './context'
 import { EmptyState } from './components/EmptyState'
+import { ExtractDialog, type ExtractRequest } from './components/ExtractDialog'
 import { Header } from './components/Header'
+import { OrganizePages } from './components/OrganizePages'
+import { formatPageRange } from './lib/pageRange'
 import { InsertDialog, type InsertRequest } from './components/InsertDialog'
 import { PropertiesPanel } from './components/PropertiesPanel'
 import { StatusBar } from './components/StatusBar'
@@ -61,6 +64,11 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState<string | null>(null)
   const [objSel, setObjSelRaw] = useState<ObjectsSelection | null>(null)
+  const [organize, setOrganize] = useState(false)
+  const organizeRef = useRef(organize)
+  organizeRef.current = organize
+  const closeOrganizeRef = useRef<() => void>(() => undefined)
+  const [extractFor, setExtractFor] = useState<number[] | null>(null)
   const selectedObject = useMemo<ObjectSelection | null>(
     () => (objSel && objSel.keys.length === 1 && objSel.keys[0].startsWith('o:') ? { pageId: objSel.pageId, objectId: objSel.keys[0].slice(2) } : null),
     [objSel],
@@ -247,26 +255,69 @@ export default function App() {
     }
   }, [toast])
 
-  const extractPages = useCallback(async () => {
+  const openExtract = useCallback(() => {
     const s = stateRef.current
-    const ids = new Set(targetIds)
-    const subset = s.pages.filter((p) => ids.has(p.id))
-    if (!subset.length) return
-    setBusy('Extracting pages…')
-    await new Promise((r) => setTimeout(r, 30))
-    try {
-      const base = baseName(s.fileName)
-      const { bytes, warnings } = await buildPdf(subset, s.sources, getSourceBytes, { title: `${base} (extract)` })
-      downloadBytes(bytes, `${base}-extracted.pdf`)
-      toast('success', `Extracted ${subset.length} page${subset.length > 1 ? 's' : ''} to ${base}-extracted.pdf.`)
-      warnings.forEach((w) => toast('warning', w))
-    } catch (e) {
-      console.error(e)
-      toast('error', `The pages could not be extracted: ${(e as Error).message}`)
-    } finally {
-      setBusy(null)
-    }
-  }, [targetIds, toast])
+    setExtractFor(s.pages.flatMap((p, i) => (s.selection.includes(p.id) ? [i] : [])))
+  }, [])
+
+  const extractPages = useCallback(
+    async (req: ExtractRequest) => {
+      const s = stateRef.current
+      const subset = req.indices.map((i) => s.pages[i]).filter(Boolean)
+      if (!subset.length) return
+      setExtractFor(null)
+      setBusy(req.separate ? `Extracting ${subset.length} files…` : 'Extracting pages…')
+      await new Promise((r) => setTimeout(r, 30))
+      try {
+        const base = baseName(s.fileName)
+        const label = formatPageRange(req.indices).replace(/–/g, '-').replace(/, /g, '_')
+        const warnings = new Set<string>()
+        if (req.separate) {
+          for (let k = 0; k < subset.length; k += 1) {
+            const r = await buildPdf([subset[k]], s.sources, getSourceBytes, { title: `${base} (page ${req.indices[k] + 1})` })
+            downloadBytes(r.bytes, `${base}-page-${req.indices[k] + 1}.pdf`)
+            r.warnings.forEach((w) => warnings.add(w))
+            await new Promise((res) => setTimeout(res, 250)) // browsers drop rapid-fire downloads
+          }
+          toast('success', `Extracted ${subset.length} page${subset.length > 1 ? 's' : ''} as separate files.`)
+        } else {
+          const r = await buildPdf(subset, s.sources, getSourceBytes, { title: `${base} (pages ${label})` })
+          downloadBytes(r.bytes, `${base}-pages-${label}.pdf`)
+          r.warnings.forEach((w) => warnings.add(w))
+          toast('success', `Extracted page${subset.length > 1 ? 's' : ''} ${formatPageRange(req.indices)} to ${base}-pages-${label}.pdf.`)
+        }
+        warnings.forEach((w) => toast('warning', w))
+        if (req.deleteAfter && subset.length < s.pages.length) {
+          dispatch({ type: 'deletePages', ids: subset.map((p) => p.id) })
+          toast('info', `Removed the extracted page${subset.length > 1 ? 's' : ''} from this document.`, { label: 'Undo', run: () => dispatch({ type: 'undo' }) })
+        }
+      } catch (e) {
+        console.error(e)
+        toast('error', `The pages could not be extracted: ${(e as Error).message}`)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [toast],
+  )
+
+  closeOrganizeRef.current = () => closeOrganize()
+  const openOrganize = useCallback(() => {
+    setObjSelRaw(null)
+    dispatch({ type: 'selectOverlay', sel: null })
+    setToolRaw('select')
+    setOrganize(true)
+  }, [])
+  const closeOrganize = useCallback(
+    (openIndex?: number) => {
+      setOrganize(false)
+      const s = stateRef.current
+      const i = openIndex ?? s.pages.findIndex((p) => s.selection.includes(p.id))
+      // the viewer remounts: scroll once it has measured itself
+      if (i >= 0) setTimeout(() => scrollToPage(i), 60)
+    },
+    [scrollToPage],
+  )
 
   // ---- global events ----------------------------------------------------------
   useEffect(() => {
@@ -290,6 +341,11 @@ export default function App() {
         return
       }
       if (typing) return
+      if (mod && e.key.toLowerCase() === 'a' && organizeRef.current) {
+        e.preventDefault()
+        dispatch({ type: 'setSelection', ids: s.pages.map((p) => p.id) })
+        return
+      }
       if (mod && e.key.toLowerCase() === 'a' && toolRef.current === 'edit') {
         e.preventDefault()
         const cur = s.pages[currentIndex]
@@ -337,6 +393,11 @@ export default function App() {
         const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as [number, number]
         const r = rotateDelta(d[0], d[1], page.rotation)
         dispatch({ type: 'updateOverlay', pageId: page.id, overlayId: overlay.id, patch: { x: overlay.x + r.x, y: overlay.y + r.y }, coalesce: `mv:${overlay.id}` })
+      } else if (e.key === 'Escape' && organizeRef.current) {
+        if (s.selection.length) dispatch({ type: 'setSelection', ids: [] })
+        else closeOrganizeRef.current()
+      } else if (organizeRef.current) {
+        // tool shortcuts don't apply in the page grid
       } else if (e.key === 'Escape') {
         dispatch({ type: 'selectOverlay', sel: null })
         dispatch({ type: 'setSelection', ids: [] })
@@ -539,6 +600,9 @@ export default function App() {
     showBoxes, setShowBoxes, layoutProvider, setLayoutProvider,
   }
 
+  // in Organize, Insert defaults to "after the last selected page" (or the end)
+  const selectedPositions = state.pages.flatMap((p, i) => (state.selection.includes(p.id) ? [i] : []))
+  const insertAfter = selectedPositions.length ? selectedPositions[selectedPositions.length - 1] : state.pages.length - 1
   const curSource = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId] : undefined
   const showScannedBanner = !!curSource?.likelyScanned && bannerDismissed !== curSource.id
 
@@ -557,9 +621,11 @@ export default function App() {
           }}
         />
         <Header onOpen={browse} onExport={() => void exportPdf()} exporting={!!busy} />
-        {hasDoc ? (
+        {hasDoc && organize ? (
+          <OrganizePages onClose={closeOrganize} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} />
+        ) : hasDoc ? (
           <>
-            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={() => void extractPages()} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} />
+            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} onOrganize={openOrganize} />
             {showScannedBanner && (
               <div role="status" className="flex items-center gap-2.5 border-b border-line bg-coral-soft px-4 py-2 text-[13px] text-ink">
                 <AlertTriangle size={15} className="shrink-0 text-coral" />
@@ -593,8 +659,15 @@ export default function App() {
       </div>
 
       {insertFiles && (
-        <InsertDialog initialFiles={insertFiles} pageCount={state.pages.length} currentIndex={currentIndex} onClose={() => setInsertFiles(null)} onInsert={doInsert} />
+        <InsertDialog
+          initialFiles={insertFiles}
+          pageCount={state.pages.length}
+          currentIndex={organize ? insertAfter : currentIndex}
+          onClose={() => setInsertFiles(null)}
+          onInsert={doInsert}
+        />
       )}
+      {extractFor && <ExtractDialog pageCount={state.pages.length} selected={extractFor} onClose={() => setExtractFor(null)} onExtract={(r) => void extractPages(r)} />}
       {confirmReplace && (
         <Modal
           title="Replace current document?"

@@ -27,10 +27,14 @@ function touch(key: string): HTMLCanvasElement | undefined {
   return hit
 }
 
-export const getCachedThumb = (sourceId: string, srcIndex: number) => touch(`${sourceId}:${srcIndex}`)
+/** Two render sizes: the side panel's and a larger one for the Organize pages grid. */
+const bucket = (width: number) => (width <= THUMB_WIDTH + 10 ? THUMB_WIDTH : 300)
 
-export function renderThumb(sourceId: string, srcIndex: number, info: PageInfo): Promise<HTMLCanvasElement> {
-  const key = `${sourceId}:${srcIndex}`
+export const getCachedThumb = (sourceId: string, srcIndex: number, width = THUMB_WIDTH) => touch(`${sourceId}:${srcIndex}:${bucket(width)}`)
+
+export function renderThumb(sourceId: string, srcIndex: number, info: PageInfo, width = THUMB_WIDTH): Promise<HTMLCanvasElement> {
+  const size = bucket(width)
+  const key = `${sourceId}:${srcIndex}:${size}`
   const hit = touch(key)
   if (hit) return Promise.resolve(hit)
   const inflight = pending.get(key)
@@ -40,7 +44,7 @@ export function renderThumb(sourceId: string, srcIndex: number, info: PageInfo):
       try {
         const page = await getPdfPage(sourceId, srcIndex)
         const dpr = Math.min(2, window.devicePixelRatio || 1)
-        const viewport = page.getViewport({ scale: (THUMB_WIDTH * dpr) / info.width })
+        const viewport = page.getViewport({ scale: (size * dpr) / info.width })
         const canvas = document.createElement('canvas')
         canvas.width = Math.ceil(viewport.width)
         canvas.height = Math.ceil(viewport.height)

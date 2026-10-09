@@ -459,6 +459,9 @@ function Overview({ currentIndex }: { currentIndex: number }) {
       <div>
         <Label>Organising pages</Label>
         <ul className="space-y-1.5">
+          <li>
+            <strong className="font-semibold text-ink">Organize</strong> (grid icon): all pages as a grid. Drag to reorder, select a range, extract.
+          </li>
           <li>Drag thumbnails to reorder. Shift/Ctrl-click to select several.</li>
           <li>Delete, duplicate, rotate and extract act on the selected pages, or the current page.</li>
         </ul>

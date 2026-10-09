@@ -33,7 +33,11 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
    Drag across empty space to select several objects (or Shift-click), then drag one of them: they move together.
    ⌘C / ⌘V duplicates them (+20 pt); open another PDF in a second browser tab and ⌘V pastes them there.
 6. **Add Text** (T) → click the page, type a correction; make it bold in the right panel.
-7. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
+7. **Organize** (grid icon in the toolbar): all pages as a grid. Drag pages (or a selection) anywhere to reorder; type
+   `1-3, 5` in the range box to select; **Extract** takes the selection or any range (`8-`, `odd`, `last`…) into a new PDF,
+   optionally one file per page and/or removing them from this document. Rotate, duplicate, delete, insert. **Done** or Esc
+   goes back; double-click a page to open it.
+8. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
 
 **Seeing the layout model:** **Boxes** in the toolbar (or `B`, or `?boxes`) outlines every detected object by type: headings,
 paragraphs, lists, tables, cells, rules, rectangles and images. **⋯ → Show detected objects** (⇧⌘D, `?debug`) adds text lines
@@ -143,11 +147,11 @@ that object falls back to a cover filled with the sampled background colour. The
 `V` select · `E` edit · `T` add text · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
 on the page, `⌘/Ctrl+C` `X` `V` copy / cut / paste, arrows nudge the selection (`Shift` = 10 pt) · `Enter` edit the selected
 object · `Del` delete the selected objects / text box / pages · `Esc` deselect · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
-`⌘/Ctrl+O` open · `B` bounding boxes · `⇧⌘D` debug view.
+`⌘/Ctrl+O` open · Organize: `⌘/Ctrl+A` select all pages, `Del` delete, `Esc` clear selection / back · `B` bounding boxes · `⇧⌘D` debug view.
 
 ## Verification status
 
-Automated (`npm test`, 97 tests): rigid moves (whole ruled table moved: same cell text, font and size at the new place,
+Automated (`npm test`, 100 tests): page-range parsing; rigid moves (whole ruled table moved: same cell text, font and size at the new place,
 nothing left behind; paragraph moved + another deleted; table deleted completely), paste from another page (original font,
 only the copied object), marquee rules, group move in one undo step, clipboard positions relative to the selection; layout model (canonical coordinates at every rotation, local adapter tree consistency,
 headings/levels, list grouping, table grid, Adobe adapter on a synthetic Extract sample incl. row/col spans, fallback);
@@ -157,7 +161,8 @@ chart false-positive guard, graphics); **true removal** (edited paragraph/cell/h
 neighbours intact, moved rule/deleted rectangle/moved+resized image verified by re-analysing the export); model, undo/redo,
 drafts, page operations and export round-trips.
 
-Exercised by hand in Chromium: dragging a table; marquee + Shift-click selection of heading, paragraph and table and
+Exercised by hand in Chromium: Organize pages (range selection, dragging two pages to a new position, extract a range
+with "delete after", undo, double-click to open); the ⋯ menu; dragging a table; marquee + Shift-click selection of heading, paragraph and table and
 moving them together; ⌘C/⌘V duplicate; ⌘V into a different document in a second browser tab, then export (pasted table is
 real text); Delete + undo; bounding boxes; debug inspector on a page rotated 90°; hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
 debug view; edits on a rotated page; export → re-open in the app.

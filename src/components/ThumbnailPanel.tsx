@@ -21,7 +21,7 @@ export const PageThumb = memo(function PageThumb({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [visible, setVisible] = useState(!!getCachedThumb(sourceId, srcIndex))
+  const [visible, setVisible] = useState(!!getCachedThumb(sourceId, srcIndex, width))
   const [failed, setFailed] = useState(false)
   const h = (width * info.height) / info.width
 
@@ -43,7 +43,7 @@ export const PageThumb = memo(function PageThumb({
       return
     }
     let cancelled = false
-    renderThumb(sourceId, srcIndex, info)
+    renderThumb(sourceId, srcIndex, info, width)
       .then((src) => {
         const c = canvasRef.current
         if (cancelled || !c) return
@@ -55,7 +55,7 @@ export const PageThumb = memo(function PageThumb({
     return () => {
       cancelled = true
     }
-  }, [visible, sourceId, srcIndex, info])
+  }, [visible, sourceId, srcIndex, info, width])
 
   return (
     <div ref={wrapRef}>

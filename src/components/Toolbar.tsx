@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
 import { PROVIDERS } from '../lib/layout/provider'
@@ -13,9 +13,10 @@ interface Props {
   onExtract: () => void
   onDelete: () => void
   onOpenTestSuite: () => void
+  onOrganize: () => void
 }
 
-export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite }: Props) {
+export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite, onOrganize }: Props) {
   const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, layoutProvider, setLayoutProvider } = useApp()
   const n = state.pages.length
   const scanned = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId]?.likelyScanned : false
@@ -36,12 +37,13 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
       {toolBtn('edit', <PencilLine size={16} />, 'Edit', 'E', !!scanned, scanned ? 'Editing is unavailable: this page appears to be scanned/image-based' : 'Edit PDF content: paragraphs, tables, lines and images (E)')}
       {toolBtn('add-text', <Type size={16} />, 'Add Text', 'T')}
       <Divider />
+      <ToolBtn icon={<LayoutGrid size={16} />} label="Organize" onClick={onOrganize} title="Organize pages: reorder by drag and drop, extract ranges, rotate, delete" />
       <ToolBtn icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />
       <ToolBtn icon={<Copy size={16} />} label="Duplicate" disabled={!has} onClick={() => dispatch({ type: 'duplicatePages', ids: targetIds })} title="Duplicate selected pages" />
       <ToolBtn icon={<Trash2 size={16} />} label="Delete" disabled={!has || targetIds.length >= n} onClick={onDelete} title="Delete selected pages (Delete)" />
       <ToolBtn icon={<RotateCcw size={16} />} label="Rotate Left" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: -90 })} title="Rotate selected pages counter-clockwise" />
       <ToolBtn icon={<RotateCw size={16} />} label="Rotate Right" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: 90 })} title="Rotate selected pages clockwise" />
-      <ToolBtn icon={<FileOutput size={16} />} label="Extract" disabled={!has} onClick={onExtract} title="Extract selected pages into a new PDF" />
+      <ToolBtn icon={<FileOutput size={16} />} label="Extract" onClick={onExtract} title="Extract pages (selected pages or a range) into a new PDF" />
 
       <div className="ml-auto flex items-center gap-0.5 pl-3">
         <ToolBtn iconOnly icon={<ChevronUp size={16} />} label="Previous page" disabled={currentIndex <= 0} onClick={() => scrollToPage(currentIndex - 1)} />

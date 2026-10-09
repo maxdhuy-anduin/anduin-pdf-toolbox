@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { ArrowUpRight, X } from 'lucide-react'
 
@@ -117,47 +118,68 @@ export interface MenuItem {
 }
 
 export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: MenuItem[] }) {
-  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const open = !!pos
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false)
+    const close = (e: Event) => {
+      const t = e.target as Node
+      if (!ref.current?.contains(t) && !menuRef.current?.contains(t)) setPos(null)
+    }
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setPos(null)
+    const away = () => setPos(null)
     window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
+    window.addEventListener('keydown', esc)
+    window.addEventListener('resize', away)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', esc)
+      window.removeEventListener('resize', away)
+    }
   }, [open])
+  const toggle = () => {
+    if (open) return setPos(null)
+    // rendered in a portal: the toolbar scrolls horizontally, which would clip an absolute dropdown
+    const r = ref.current!.getBoundingClientRect()
+    setPos({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) })
+  }
   return (
     <div className="relative" ref={ref}>
-      {trigger(() => setOpen((v) => !v))}
-      {open && (
-        <div role="menu" className="absolute right-0 top-9 z-40 min-w-[260px] border border-line bg-white py-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.25)]">
-          {items.map((it) =>
-            it.heading ? (
-              <div key={it.label} className="mt-1 border-t border-line-soft px-3 pb-1 pt-2.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted first:mt-0 first:border-t-0">
-                {it.label}
-              </div>
-            ) : (
-            <button
-              key={it.label}
-              role="menuitemcheckbox"
-              aria-checked={it.checked}
-              type="button"
-              disabled={it.disabled}
-              onClick={() => {
-                setOpen(false)
-                it.onClick?.()
-              }}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink hover:bg-wash disabled:cursor-not-allowed disabled:text-faint disabled:hover:bg-transparent"
-            >
-              <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${it.checked ? 'border-ink bg-ink' : it.checked === false ? 'border-line' : 'border-transparent'}`}>
-                {it.checked && <span className="h-1.5 w-1.5 bg-white" />}
-              </span>
-              <span className="flex-1">{it.label}</span>
-              {it.hint && <span className="font-mono text-[10.5px] text-muted">{it.hint}</span>}
-            </button>
-            ),
-          )}
-        </div>
-      )}
+      {trigger(toggle)}
+      {pos &&
+        createPortal(
+          <div ref={menuRef} role="menu" className="fixed z-[90] min-w-[260px] border border-line bg-white py-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.25)]" style={{ top: pos.top, right: pos.right }}>
+            {items.map((it) =>
+              it.heading ? (
+                <div key={it.label} className="mt-1 border-t border-line-soft px-3 pb-1 pt-2.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted first:mt-0 first:border-t-0">
+                  {it.label}
+                </div>
+              ) : (
+                <button
+                  key={it.label}
+                  role="menuitemcheckbox"
+                  aria-checked={it.checked}
+                  type="button"
+                  disabled={it.disabled}
+                  onClick={() => {
+                    setPos(null)
+                    it.onClick?.()
+                  }}
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink hover:bg-wash disabled:cursor-not-allowed disabled:text-faint disabled:hover:bg-transparent"
+                >
+                  <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${it.checked ? 'border-ink bg-ink' : it.checked === false ? 'border-line' : 'border-transparent'}`}>
+                    {it.checked && <span className="h-1.5 w-1.5 bg-white" />}
+                  </span>
+                  <span className="flex-1">{it.label}</span>
+                  {it.hint && <span className="font-mono text-[10.5px] text-muted">{it.hint}</span>}
+                </button>
+              ),
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
