@@ -22,7 +22,7 @@ developer machine. Real-world documents were *not* tested in this audit (see §6
 |---|---|---|
 | `npm ci` | pass (0 vulnerabilities) | pass |
 | `npx tsc --noEmit` | pass | pass |
-| `npm test` (`vitest run`) | pass, 130 tests / 8 files | pass, **147 tests / 11 files** |
+| `npm test` (`vitest run`) | pass, 130 tests / 8 files | pass, **147 tests / 11 files** (152 / 12 with document tabs) |
 | `npm run build` | pass (warning: 1.34 MB main chunk) | pass (same warning) |
 | `npm audit` | 0 vulnerabilities | 0 vulnerabilities |
 | lint | not configured | not configured |
@@ -57,7 +57,7 @@ Pass = observed working in the real app and/or verified in exported bytes. "Unit
 | Export integrity | see §6 | Pass with warnings | |
 | Production build | served `dist/`, opened, rotated, exported, re-opened | Pass | |
 | Word → PDF conversion | — | **Not implemented** (no such feature exists) | |
-| Document tabs (in-app) | — | **Not implemented** (cross-document paste uses browser tabs) | |
+| Document tabs (in-app), added after the audit | real clicks/keys: open several files at once, switch (view + undo kept per tab), copy in one tab / paste in another + export, close with unsaved-changes prompt (sources released), + new tab, drop on the tab bar, toast Undo after switching, switching while typing; `workspace.test.ts` | Pass | all tabs stay in memory until closed |
 
 ## 4. Defects found
 

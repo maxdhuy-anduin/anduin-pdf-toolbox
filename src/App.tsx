@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { AppContext, type AppCtx, type ObjectSelection, type ObjectsSelection, type SearchView, type Tool, type ToastKind, type ZoomState } from './context'
 import { FindBar } from './components/FindBar'
@@ -6,6 +6,7 @@ import type { Margins, Unit } from './lib/margins'
 import { EmptyState } from './components/EmptyState'
 import { ExtractDialog, type ExtractRequest } from './components/ExtractDialog'
 import { Header } from './components/Header'
+import { TabBar } from './components/TabBar'
 import { OrganizePages } from './components/OrganizePages'
 import { formatPageRange } from './lib/pageRange'
 import { InsertDialog, type InsertRequest } from './components/InsertDialog'
@@ -19,7 +20,8 @@ import { Button, Modal } from './components/ui'
 import { baseName, downloadBytes } from './lib/download'
 import { buildPdf } from './lib/export'
 import { rotateDelta } from './lib/geom'
-import { initialState, isDirty, isGraphic, isText, makePage, makeTextOverlay, reducer, uid, type Overlay } from './lib/model'
+import { initialState, isDirty, isGraphic, isText, makePage, makeTextOverlay, reducer, uid, type Action, type Overlay } from './lib/model'
+import { activeTab, anyDirty, defaultView, emptyTab, hasDocument, initialWorkspace, tabName, tabSources, workspaceReducer, type TabView } from './lib/workspace'
 import { getClipboard, sameText, setClipboard, TAB_ID } from './lib/clipboard'
 import { copySelection, pageItems } from './lib/objects'
 import { measureOverlay } from './components/PageOverlays'
@@ -65,7 +67,18 @@ function writeFlag(name: string, v: boolean) {
 }
 
 export default function App() {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  // Document tabs: each tab is an independent document; the active one is shown through the context.
+  const [ws, wsDispatch] = useReducer(workspaceReducer, undefined, initialWorkspace)
+  const wsRef = useRef(ws)
+  wsRef.current = ws
+  const tab = activeTab(ws)
+  const state = tab.doc
+  const activeRef = useRef(tab.id)
+  activeRef.current = tab.id
+  /** Document actions go to the tab that is active when they are dispatched (stable, like useReducer's). */
+  const dispatch = useCallback((action: Action) => wsDispatch({ type: 'doc', id: activeRef.current, action }), [])
+  /** For work that finishes later (export, extract, paste, toast "Undo"): stays with the tab it started in. */
+  const dispatchTo = useCallback((id: string, action: Action) => wsDispatch({ type: 'doc', id, action }), [])
   const [tool, setToolRaw] = useState<Tool>('select')
   const [zoom, setZoom] = useState<ZoomState>({ mode: 'fit' })
   const [scale, setScale] = useState(1)
@@ -74,7 +87,7 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [insertFiles, setInsertFiles] = useState<File[] | null>(null)
-  const [confirmReplace, setConfirmReplace] = useState<null | (() => void)>(null)
+  const [confirmClose, setConfirmClose] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState<string | null>(null)
   const [objSel, setObjSelRaw] = useState<ObjectsSelection | null>(null)
@@ -119,6 +132,10 @@ export default function App() {
     }
   }, [])
   const [customMargins, setCustomMargins] = useState<Margins | null>(null)
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const customMarginsRef = useRef(customMargins)
+  customMarginsRef.current = customMargins
   const openFind = useCallback((replace: boolean) => setFind((f) => ({ ...f, open: true, replace: replace || (f.open && f.replace), nonce: f.nonce + 1 })), [])
   const closeFind = useCallback(() => setFind((f) => ({ ...f, open: false })), [])
   const selectedObjectRef = useRef(selectedObject)
@@ -192,22 +209,77 @@ export default function App() {
     if (t !== 'select') dispatch({ type: 'setSelection', ids: [] })
   }, [])
 
+  // ---- tabs ------------------------------------------------------------------------
+  /** How the active tab is being viewed (kept with it while another tab is shown). */
+  const currentView = (): TabView => ({ currentIndex: currentIndexRef.current, zoom: zoomRef.current, customMargins: customMarginsRef.current })
+  /** Finishes what is in progress on the active tab before another one is shown. */
+  const leaveActiveTab = (): TabView => {
+    const el = document.activeElement as HTMLElement | null
+    if (el && el !== document.body) el.blur() // a text box being typed in commits / discards its draft now
+    dispatch({ type: 'discardDraft' })
+    return currentView()
+  }
+  /** Per-document UI starts fresh on the newly shown tab; its own view is restored. */
+  const showTab = (id: string, view: TabView) => {
+    activeRef.current = id
+    setObjSelRaw(null)
+    setToolRaw('select')
+    setOrganize(false)
+    setExtractFor(null)
+    setFind((f) => ({ ...f, open: false, step: null }))
+    setSearch(null)
+    setZoom(view.zoom)
+    setCustomMargins(view.customMargins)
+    setCurrentIndex(view.currentIndex)
+    // the viewer remounts for the tab: scroll once it has measured itself
+    setTimeout(() => scrollToPage(view.currentIndex), 60)
+  }
+  const activateTab = (id: string) => {
+    const w = wsRef.current
+    const target = w.tabs.find((t) => t.id === id)
+    if (!target || id === w.active || busy) return
+    wsDispatch({ type: 'activate', id, leaving: leaveActiveTab() })
+    showTab(id, target.view)
+  }
+  const newTab = () => {
+    if (busy || !hasDocument(activeTab(wsRef.current))) return // the active tab is already an empty one
+    const t = emptyTab()
+    wsDispatch({ type: 'open', tab: t, leaving: leaveActiveTab() })
+    showTab(t.id, t.view)
+  }
+  const closeTab = (id: string) => {
+    const w = wsRef.current
+    const t = w.tabs.find((x) => x.id === id)
+    if (!t) return
+    if (id === w.active) leaveActiveTab()
+    const action = { type: 'close' as const, id, fresh: emptyTab() }
+    const next = workspaceReducer(w, action)
+    wsDispatch(action)
+    tabSources(t).forEach(releaseSource) // the closed document's data doesn't stay in memory
+    if (id === w.active) showTab(next.active, activeTab(next).view)
+  }
+  const requestCloseTab = (id: string) => {
+    const t = wsRef.current.tabs.find((x) => x.id === id)
+    if (!t || busy) return
+    if (isDirty(t.doc)) setConfirmClose(id)
+    else closeTab(id)
+  }
+
   // ---- opening documents -----------------------------------------------------
+  /** Opens a document in the active tab if it is empty, otherwise in a new tab. */
   const loadDocument = useCallback(
     async (name: string, make: () => Promise<Awaited<ReturnType<typeof openPdfFile>>>) => {
       setBusy(`Opening ${name}…`)
       await new Promise((r) => setTimeout(r, 30))
       try {
         const meta = await make()
-        const old = Object.keys(stateRef.current.sources)
-        dispatch({ type: 'load', source: meta, fileName: meta.name })
-        old.forEach(releaseSource)
-        setObjSelRaw(null)
+        const cur = activeTab(wsRef.current)
+        const into = hasDocument(cur) ? undefined : cur.id
+        const t = { ...emptyTab(), doc: reducer(initialState, { type: 'load', source: meta, fileName: meta.name }), view: defaultView() }
+        wsDispatch({ type: 'open', tab: t, into, leaving: leaveActiveTab() })
+        showTab(into ?? t.id, t.view)
         // parse once, analyze once: page content objects are cached in the background
         if (!meta.likelyScanned) prefetchContent(meta.id, meta.numPages)
-        setToolRaw('select')
-        setZoom({ mode: 'fit' })
-        setCurrentIndex(0)
         setScrollRequest((r) => ({ index: 0, nonce: (r?.nonce ?? 0) + 1 }))
         setBannerDismissed(null)
         if (meta.size > LARGE_FILE_BYTES) toast('warning', 'This is a large file. Some operations may be slow in the browser.')
@@ -217,30 +289,31 @@ export default function App() {
         setBusy(null)
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [toast],
   )
 
   const openFile = useCallback(
-    (file: File) => {
-      if (!isPdfFile(file)) return toast('error', `“${file.name}” is not a PDF file.`)
-      const go = () => void loadDocument(file.name, () => openPdfFile(file))
-      if (isDirty(stateRef.current)) setConfirmReplace(() => go)
-      else go()
+    (file: File): Promise<void> => {
+      if (!isPdfFile(file)) {
+        toast('error', `“${file.name}” is not a PDF file.`)
+        return Promise.resolve()
+      }
+      return loadDocument(file.name, () => openPdfFile(file))
     },
     [loadDocument, toast],
   )
+  /** Several files: one tab each, opened one after the other. */
+  const openFiles = useCallback(
+    async (files: File[]) => {
+      for (const f of files) await openFile(f)
+    },
+    [openFile],
+  )
 
-  const openSample = useCallback(() => {
-    const go = () => void loadDocument(SAMPLE_FUND_NAME, async () => openPdfBytes(SAMPLE_FUND_NAME, await createSampleFund()))
-    if (isDirty(stateRef.current)) setConfirmReplace(() => go)
-    else go()
-  }, [loadDocument])
+  const openSample = useCallback(() => void loadDocument(SAMPLE_FUND_NAME, async () => openPdfBytes(SAMPLE_FUND_NAME, await createSampleFund())), [loadDocument])
 
-  const openTestSuite = useCallback(() => {
-    const go = () => void loadDocument(LAYOUT_SUITE_NAME, async () => openPdfBytes(LAYOUT_SUITE_NAME, await createLayoutSuite()))
-    if (isDirty(stateRef.current)) setConfirmReplace(() => go)
-    else go()
-  }, [loadDocument])
+  const openTestSuite = useCallback(() => void loadDocument(LAYOUT_SUITE_NAME, async () => openPdfBytes(LAYOUT_SUITE_NAME, await createLayoutSuite())), [loadDocument])
 
   const browse = () => fileInput.current?.click()
 
@@ -256,8 +329,9 @@ export default function App() {
     const ids = s.selection.length ? s.selection : s.pages[currentIndex] ? [s.pages[currentIndex].id] : []
     if (!ids.length) return
     if (ids.length >= s.pages.length) return toast('warning', 'A PDF needs at least one page, so not every page can be deleted.')
+    const docId = activeRef.current
     dispatch({ type: 'deletePages', ids })
-    toast('info', `Deleted ${ids.length} page${ids.length > 1 ? 's' : ''}.`, { label: 'Undo', run: () => dispatch({ type: 'undo' }) })
+    toast('info', `Deleted ${ids.length} page${ids.length > 1 ? 's' : ''}.`, { label: 'Undo', run: () => dispatchTo(docId, { type: 'undo' }) })
   }, [currentIndex, toast])
 
   const doInsert = useCallback(
@@ -277,6 +351,7 @@ export default function App() {
 
   const exportPdf = useCallback(async () => {
     const s = stateRef.current
+    const docId = activeRef.current
     if (!s.pages.length) return
     setBusy('Preparing your PDF…')
     await new Promise((r) => setTimeout(r, 30))
@@ -284,7 +359,7 @@ export default function App() {
       const base = baseName(s.fileName)
       const { bytes, warnings, stats } = await buildPdf(s.pages, s.sources, getSourceBytes, { title: base })
       downloadBytes(bytes, `${base}-edited.pdf`)
-      dispatch({ type: 'markSaved', pages: s.pages })
+      dispatchTo(docId, { type: 'markSaved', pages: s.pages })
       const edits = stats.removed + stats.covered
       toast(
         'success',
@@ -308,6 +383,7 @@ export default function App() {
   const extractPages = useCallback(
     async (req: ExtractRequest) => {
       const s = stateRef.current
+      const docId = activeRef.current
       const subset = req.indices.map((i) => s.pages[i]).filter(Boolean)
       if (!subset.length) return
       setExtractFor(null)
@@ -333,8 +409,8 @@ export default function App() {
         }
         warnings.forEach((w) => toast('warning', w))
         if (req.deleteAfter && subset.length < s.pages.length) {
-          dispatch({ type: 'deletePages', ids: subset.map((p) => p.id) })
-          toast('info', `Removed the extracted page${subset.length > 1 ? 's' : ''} from this document.`, { label: 'Undo', run: () => dispatch({ type: 'undo' }) })
+          dispatchTo(docId, { type: 'deletePages', ids: subset.map((p) => p.id) })
+          toast('info', `Removed the extracted page${subset.length > 1 ? 's' : ''} from this document.`, { label: 'Undo', run: () => dispatchTo(docId, { type: 'undo' }) })
         }
       } catch (e) {
         console.error(e)
@@ -538,17 +614,19 @@ export default function App() {
     /** `text` = what the system clipboard holds, or null when the browser didn't tell us. */
     const paste = async (text: string | null) => {
       const s = stateRef.current
+      const docId = activeRef.current
       const page = s.pages[currentIndexRef.current]
       if (!page) return
       const pending = getClipboard()
       const payload = pending ? await pending.catch(() => null) : null
+      if (activeRef.current !== docId) return // another tab was shown meanwhile: don't paste into the wrong document
       const info = s.sources[page.sourceId].pages[page.srcIndex]
       if (!payload || (text !== null && !sameText(payload.sel.text, text))) {
         if (text === null) return
         // something else is on the system clipboard: paste it as a new text box
         if (!text.trim()) return
         const t = makeTextOverlay(72, 72, { text: text.slice(0, 5000), width: Math.min(360, info.width - 144) })
-        dispatch({ type: 'editOverlays', pageId: page.id, add: [t] })
+        dispatchTo(docId, { type: 'editOverlays', pageId: page.id, add: [t] })
         setObjSel({ pageId: page.id, keys: [`v:${t.id}`] })
         return
       }
@@ -573,8 +651,8 @@ export default function App() {
             if (!id || !stateRef.current.sources[id]) {
               const cp = payload.pages[`${g.sourceId}|${g.srcIndex}`]
               const meta = await openPdfBytes(`${cp.name} (copied)`, cp.bytes)
-              dispatch({ type: 'addSource', source: meta })
-              stateRef.current = { ...stateRef.current, sources: { ...stateRef.current.sources, [meta.id]: meta } }
+              dispatchTo(docId, { type: 'addSource', source: meta })
+              if (activeRef.current === docId) stateRef.current = { ...stateRef.current, sources: { ...stateRef.current.sources, [meta.id]: meta } }
               id = meta.id
               fragmentSources.current.set(k, id)
             }
@@ -586,7 +664,8 @@ export default function App() {
         for (const t of sel.texts) add.push({ ...t, id: uid('tx'), x: t.x + tx, y: t.y + ty })
         for (const l of sel.lines ?? []) add.push({ ...l, id: uid('ln'), x1: l.x1 + tx, y1: l.y1 + ty, x2: l.x2 + tx, y2: l.y2 + ty })
         for (const sh of sel.shapes ?? []) add.push({ ...sh, id: uid('sh'), x: sh.x + tx, y: sh.y + ty })
-        dispatch({ type: 'editOverlays', pageId: page.id, add })
+        dispatchTo(docId, { type: 'editOverlays', pageId: page.id, add })
+        if (activeRef.current !== docId) return
         setObjSel({ pageId: page.id, keys: add.map((o) => `v:${o.id}`) })
         if (!samePage) toast('success', `Pasted ${add.length > 1 ? `${add.length} blocks` : 'content'} on page ${currentIndexRef.current + 1}.`)
       } catch (err) {
@@ -604,11 +683,11 @@ export default function App() {
       window.removeEventListener('cut', onCut)
       window.removeEventListener('paste', onPaste)
     }
-  }, [setObjSel, toast])
+  }, [setObjSel, toast, dispatchTo])
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isDirty(stateRef.current)) e.preventDefault()
+      if (anyDirty(wsRef.current)) e.preventDefault()
     }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
@@ -636,10 +715,12 @@ export default function App() {
       setDragging(false)
       const files = [...(e.dataTransfer?.files ?? [])]
       if (!files.length) return
-      if (stateRef.current.pages.length) {
+      const onTabBar = !!(e.target as HTMLElement | null)?.closest?.('[data-tabbar]')
+      if (stateRef.current.pages.length && !onTabBar) {
         setInsertFiles(files.filter(isPdfFile))
         if (!files.some(isPdfFile)) toast('error', 'Only PDF files can be inserted.')
-      } else openFile(files.find(isPdfFile) ?? files[0])
+      } else if (files.some(isPdfFile)) void openFiles(files.filter(isPdfFile))
+      else void openFile(files[0]) // says it's not a PDF
     }
     window.addEventListener('dragenter', enter)
     window.addEventListener('dragleave', leave)
@@ -651,13 +732,14 @@ export default function App() {
       window.removeEventListener('dragover', over)
       window.removeEventListener('drop', drop)
     }
-  }, [openFile, toast])
+  }, [openFile, openFiles, toast])
 
   // dev/test hook (not shipped in production builds)
   useEffect(() => {
     if (!import.meta.env.DEV) return
     ;(window as unknown as Record<string, unknown>).__toolbox = {
       getState: () => stateRef.current,
+      getWorkspace: () => wsRef.current,
       exportBytes: async () => (await buildPdf(stateRef.current.pages, stateRef.current.sources, getSourceBytes)).bytes,
       dispatch,
       openBytes: (name: string, bytes: Uint8Array) => loadDocument(name, () => openPdfBytes(name, bytes)),
@@ -684,14 +766,27 @@ export default function App() {
           ref={fileInput}
           type="file"
           accept="application/pdf,.pdf"
+          multiple
           hidden
           onChange={(e) => {
-            const f = e.target.files?.[0]
+            const files = [...(e.target.files ?? [])]
             e.target.value = ''
-            if (f) openFile(f)
+            if (files.length) void openFiles(files)
           }}
         />
         <Header onOpen={browse} onExport={() => void exportPdf()} exporting={!!busy} />
+        {(ws.tabs.length > 1 || hasDoc) && (
+          <TabBar
+            tabs={ws.tabs.map((t) => ({ id: t.id, name: tabName(t), dirty: isDirty(t.doc), empty: !hasDocument(t) }))}
+            active={tab.id}
+            onActivate={activateTab}
+            onClose={requestCloseTab}
+            onNew={newTab}
+            disabled={!!busy}
+          />
+        )}
+        {/* keyed by tab: switching documents remounts the viewer, panels and their local state */}
+        <Fragment key={tab.id}>
         {hasDoc && organize ? (
           <OrganizePages onClose={closeOrganize} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} />
         ) : hasDoc ? (
@@ -737,6 +832,7 @@ export default function App() {
         ) : (
           <EmptyState onBrowse={browse} onSample={openSample} dragging={dragging} />
         )}
+        </Fragment>
         <StatusBar targetIds={targetIds} />
       </div>
 
@@ -750,29 +846,32 @@ export default function App() {
         />
       )}
       {extractFor && <ExtractDialog pageCount={state.pages.length} selected={extractFor} onClose={() => setExtractFor(null)} onExtract={(r) => void extractPages(r)} />}
-      {confirmReplace && (
-        <Modal
-          title="Replace current document?"
-          onClose={() => setConfirmReplace(null)}
-          footer={
-            <>
-              <Button onClick={() => setConfirmReplace(null)}>Keep editing</Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  const go = confirmReplace
-                  setConfirmReplace(null)
-                  go()
-                }}
-              >
-                Discard changes and open
-              </Button>
-            </>
-          }
-        >
-          <p className="text-sm text-ink-soft">You have unsaved changes in {state.fileName}. Opening another document will discard them. Export first if you want to keep them.</p>
-        </Modal>
-      )}
+      {confirmClose && (() => {
+        const t = ws.tabs.find((x) => x.id === confirmClose)
+        if (!t) return null
+        return (
+          <Modal
+            title={`Close “${tabName(t)}”?`}
+            onClose={() => setConfirmClose(null)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmClose(null)}>Keep open</Button>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setConfirmClose(null)
+                    closeTab(t.id)
+                  }}
+                >
+                  Close without exporting
+                </Button>
+              </>
+            }
+          >
+            <p className="text-sm text-ink-soft">This document has unsaved changes. Closing its tab discards them. Export it first if you want to keep them.</p>
+          </Modal>
+        )
+      })()}
       {dragging && hasDoc && (
         <div className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-ink/30">
           <div className="border-2 border-dashed border-sky bg-white px-8 py-6 text-center shadow-xl">
