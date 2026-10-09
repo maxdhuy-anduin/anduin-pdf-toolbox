@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
-import { AppContext, type AppCtx, type ObjectSelection, type Tool, type ToastKind, type ZoomState } from './context'
+import { AppContext, type AppCtx, type ObjectSelection, type ObjectsSelection, type Tool, type ToastKind, type ZoomState } from './context'
 import { EmptyState } from './components/EmptyState'
 import { Header } from './components/Header'
 import { InsertDialog, type InsertRequest } from './components/InsertDialog'
@@ -14,12 +14,15 @@ import { Button, Modal } from './components/ui'
 import { baseName, downloadBytes } from './lib/download'
 import { buildPdf } from './lib/export'
 import { rotateDelta } from './lib/geom'
-import { initialState, isDirty, isGraphic, isText, makePage, reducer } from './lib/model'
-import { prefetchContent } from './lib/content/cache'
+import { initialState, isDirty, isGraphic, isText, makePage, makeTextOverlay, reducer, uid, type Overlay } from './lib/model'
+import { getClipboard, sameText, setClipboard, TAB_ID } from './lib/clipboard'
+import { copySelection, pageItems } from './lib/objects'
+import { measureOverlay } from './components/PageOverlays'
+import { getCachedContent, prefetchContent } from './lib/content/cache'
 import { getActiveProvider, setActiveProvider } from './lib/layout/cache'
 import type { ProviderId } from './lib/layout/types'
 import { createLayoutSuite, LAYOUT_SUITE_NAME } from './lib/testDocs'
-import { getSourceBytes, LARGE_FILE_BYTES, openPdfBytes, openPdfFile, PdfError, releaseSource } from './lib/pdfjs'
+import { getSourceBytes, hasSource, LARGE_FILE_BYTES, openPdfBytes, openPdfFile, PdfError, releaseSource } from './lib/pdfjs'
 import { createSampleFund, SAMPLE_FUND_NAME } from './lib/samples'
 
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
@@ -57,13 +60,23 @@ export default function App() {
   const [confirmReplace, setConfirmReplace] = useState<null | (() => void)>(null)
   const [dragging, setDragging] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState<string | null>(null)
-  const [selectedObject, setSelectedObjectRaw] = useState<ObjectSelection | null>(null)
+  const [objSel, setObjSelRaw] = useState<ObjectsSelection | null>(null)
+  const selectedObject = useMemo<ObjectSelection | null>(
+    () => (objSel && objSel.keys.length === 1 && objSel.keys[0].startsWith('o:') ? { pageId: objSel.pageId, objectId: objSel.keys[0].slice(2) } : null),
+    [objSel],
+  )
   const [editRequest, setEditRequest] = useState<AppCtx['editRequest']>(null)
   const [debug, setDebug] = useState(() => readFlag('debug'))
   const [showBoxes, setShowBoxesRaw] = useState(() => readFlag('boxes'))
   const [layoutProvider, setLayoutProviderRaw] = useState<ProviderId>('local')
   const selectedObjectRef = useRef(selectedObject)
   selectedObjectRef.current = selectedObject
+  const objSelRef = useRef(objSel)
+  objSelRef.current = objSel
+  const currentIndexRef = useRef(currentIndex)
+  currentIndexRef.current = currentIndex
+  const toolRef = useRef(tool)
+  toolRef.current = tool
   const debugRef = useRef(debug)
   debugRef.current = debug
   const fileInput = useRef<HTMLInputElement>(null)
@@ -95,10 +108,15 @@ export default function App() {
     setScrollRequest((r) => ({ index: i, nonce: (r?.nonce ?? 0) + 1 }))
   }, [])
 
-  const setSelectedObject = useCallback((sel: ObjectSelection | null) => {
-    setSelectedObjectRaw(sel)
-    if (sel) dispatch({ type: 'selectOverlay', sel: null })
+  const setObjSel = useCallback((sel: ObjectsSelection | null) => {
+    const next = sel && sel.keys.length ? sel : null
+    setObjSelRaw(next)
+    if (next) dispatch({ type: 'selectOverlay', sel: null })
   }, [])
+  const setSelectedObject = useCallback(
+    (sel: ObjectSelection | null) => setObjSel(sel ? { pageId: sel.pageId, keys: [`o:${sel.objectId}`] } : null),
+    [setObjSel],
+  )
   const requestEdit = useCallback((pageId: string, objectId: string) => setEditRequest((r) => ({ pageId, objectId, nonce: (r?.nonce ?? 0) + 1 })), [])
   const toggleDebug = useCallback((v: boolean) => {
     setDebug(v)
@@ -117,7 +135,7 @@ export default function App() {
 
   const setTool = useCallback((t: Tool) => {
     setToolRaw(t)
-    setSelectedObjectRaw(null)
+    setObjSelRaw(null)
     if (t !== 'select') dispatch({ type: 'setSelection', ids: [] })
   }, [])
 
@@ -131,7 +149,7 @@ export default function App() {
         const old = Object.keys(stateRef.current.sources)
         dispatch({ type: 'load', source: meta, fileName: meta.name })
         old.forEach(releaseSource)
-        setSelectedObjectRaw(null)
+        setObjSelRaw(null)
         // parse once, analyze once: page content objects are cached in the background
         if (!meta.likelyScanned) prefetchContent(meta.id, meta.numPages)
         setToolRaw('select')
@@ -272,6 +290,12 @@ export default function App() {
         return
       }
       if (typing) return
+      if (mod && e.key.toLowerCase() === 'a' && toolRef.current === 'edit') {
+        e.preventDefault()
+        const cur = s.pages[currentIndex]
+        if (cur) window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: cur.id, op: 'select-all' } }))
+        return
+      }
       if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         dispatch({ type: e.shiftKey ? 'redo' : 'undo' })
@@ -293,9 +317,14 @@ export default function App() {
         else if (isText(overlay) && (overlay.cover || overlay.source)) dispatch({ type: 'updateOverlay', pageId: page.id, overlayId: overlay.id, patch: { text: '' } })
         else dispatch({ type: 'removeOverlay', pageId: page.id, overlayId: overlay.id })
         dispatch({ type: 'selectOverlay', sel: null })
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && obj) {
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && objSelRef.current) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent('toolbox:delete-object', { detail: obj }))
+        window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: objSelRef.current.pageId, op: 'delete' } }))
+      } else if (e.key.startsWith('Arrow') && objSelRef.current) {
+        e.preventDefault()
+        const step = e.shiftKey ? 10 : 1
+        const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as [number, number]
+        window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: objSelRef.current.pageId, op: 'nudge', dx: d[0], dy: d[1] } }))
       } else if (e.key === 'Enter' && obj) {
         e.preventDefault()
         requestEdit(obj.pageId, obj.objectId)
@@ -311,7 +340,7 @@ export default function App() {
       } else if (e.key === 'Escape') {
         dispatch({ type: 'selectOverlay', sel: null })
         dispatch({ type: 'setSelection', ids: [] })
-        if (selectedObjectRef.current) setSelectedObjectRaw(null)
+        if (objSelRef.current) setObjSelRaw(null)
         else setToolRaw('select')
       } else if (e.key === 'v' || e.key === 'V') setTool('select')
       else if (e.key === 'e' || e.key === 'E') {
@@ -323,6 +352,128 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes])
+
+  // ---- copy / cut / paste of PDF objects ---------------------------------------
+  const pasteCount = useRef<{ id: string; n: number }>({ id: '', n: 0 })
+  const fragmentSources = useRef(new Map<string, string>())
+  useEffect(() => {
+    const active = () => toolRef.current === 'edit' && stateRef.current.pages.length > 0
+    // ⌘C / ⌘X / ⌘V are handled on the key press (Safari sends no copy/paste events without a text
+    // selection); the clipboard events, when they come, put the plain text on the system clipboard.
+    let lastCopy = { at: 0, text: '' }
+    let pasteTimer = 0
+    const doCopy = (cut: boolean): string | null => {
+      const sel = objSelRef.current
+      if (!sel || !active()) return null
+      const s = stateRef.current
+      const page = s.pages.find((p) => p.id === sel.pageId)
+      if (!page) return null
+      const content = getCachedContent(page.sourceId, page.srcIndex)
+      const items = pageItems(content, page.overlays, (id) => measureOverlay(page.id, id))
+      const copied = copySelection(page, content, items, sel.keys)
+      if (!copied) return null
+      setClipboard(copied, page.id, (sid, i) => s.sources[sid].pages[i], (sid) => s.sources[sid]?.name ?? 'document')
+      lastCopy = { at: Date.now(), text: copied.text }
+      pasteCount.current = { id: '', n: 0 }
+      const n = sel.keys.length
+      if (cut) window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: page.id, op: 'delete' } }))
+      toast('info', `${cut ? 'Cut' : 'Copied'} ${n} object${n > 1 ? 's' : ''}. Paste with ⌘V here, on another page, or in another document tab.`)
+      return copied.text
+    }
+    const copy = (e: ClipboardEvent, cut: boolean) => {
+      if (isTyping(e.target)) return
+      const text = Date.now() - lastCopy.at < 500 ? lastCopy.text : doCopy(cut)
+      if (text === null) return
+      e.preventDefault()
+      e.clipboardData?.setData('text/plain', text)
+    }
+    const onCopy = (e: ClipboardEvent) => copy(e, false)
+    const onCut = (e: ClipboardEvent) => copy(e, true)
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || isTyping(e.target) || !active()) return
+      const k = e.key.toLowerCase()
+      if (k === 'c' || k === 'x') {
+        const text = doCopy(k === 'x')
+        if (text !== null) navigator.clipboard?.writeText(text).catch(() => undefined)
+      } else if (k === 'v') {
+        window.clearTimeout(pasteTimer)
+        pasteTimer = window.setTimeout(() => void paste(null), 80)
+      }
+    }
+    const onPaste = (e: ClipboardEvent) => {
+      if (isTyping(e.target) || !active()) return
+      window.clearTimeout(pasteTimer)
+      e.preventDefault()
+      void paste(e.clipboardData?.getData('text/plain') ?? '')
+    }
+    /** `text` = what the system clipboard holds, or null when the browser didn't tell us. */
+    const paste = async (text: string | null) => {
+      const s = stateRef.current
+      const page = s.pages[currentIndexRef.current]
+      if (!page) return
+      const pending = getClipboard()
+      const payload = pending ? await pending.catch(() => null) : null
+      const info = s.sources[page.sourceId].pages[page.srcIndex]
+      if (!payload || (text !== null && !sameText(payload.sel.text, text))) {
+        if (text === null) return
+        // something else is on the system clipboard: paste it as a new text box
+        if (!text.trim()) return
+        const t = makeTextOverlay(72, 72, { text: text.slice(0, 5000), width: Math.min(360, info.width - 144) })
+        dispatch({ type: 'editOverlays', pageId: page.id, add: [t] })
+        setObjSel({ pageId: page.id, keys: [`v:${t.id}`] })
+        return
+      }
+      try {
+        const { sel } = payload
+        // same page in the same tab: offset the copy so it's visibly a duplicate
+        const samePage = payload.tab === TAB_ID && payload.pageId === page.id
+        if (pasteCount.current.id !== `${payload.id}|${page.id}`) pasteCount.current = { id: `${payload.id}|${page.id}`, n: 0 }
+        pasteCount.current.n += 1
+        const off = samePage ? 20 * pasteCount.current.n : 0
+        const tx = Math.max(0, Math.min(sel.origin.x + off, info.width - sel.size.w))
+        const ty = Math.max(0, Math.min(sel.origin.y + off, info.height - sel.size.h))
+        const add: Overlay[] = []
+        for (const g of sel.groups) {
+          let sourceId = g.sourceId
+          let srcIndex = g.srcIndex
+          const local = payload.tab === TAB_ID && !!stateRef.current.sources[g.sourceId] && hasSource(g.sourceId)
+          if (!local) {
+            // content from another document / tab: register its one-page PDF as a hidden source
+            const k = `${payload.id}|${g.sourceId}|${g.srcIndex}`
+            let id = fragmentSources.current.get(k)
+            if (!id || !stateRef.current.sources[id]) {
+              const cp = payload.pages[`${g.sourceId}|${g.srcIndex}`]
+              const meta = await openPdfBytes(`${cp.name} (copied)`, cp.bytes)
+              dispatch({ type: 'addSource', source: meta })
+              stateRef.current = { ...stateRef.current, sources: { ...stateRef.current.sources, [meta.id]: meta } }
+              id = meta.id
+              fragmentSources.current.set(k, id)
+            }
+            sourceId = id
+            srcIndex = 0
+          }
+          add.push({ id: uid('paste'), type: 'paste', sourceId, srcIndex, items: g.items, dx: g.shift.x + tx, dy: g.shift.y + ty })
+        }
+        for (const t of sel.texts) add.push({ ...t, id: uid('tx'), x: t.x + tx, y: t.y + ty })
+        dispatch({ type: 'editOverlays', pageId: page.id, add })
+        setObjSel({ pageId: page.id, keys: add.map((o) => `v:${o.id}`) })
+        if (!samePage) toast('success', `Pasted ${add.length > 1 ? `${add.length} blocks` : 'content'} on page ${currentIndexRef.current + 1}.`)
+      } catch (err) {
+        console.error(err)
+        toast('error', 'The copied content could not be pasted here.')
+      }
+    }
+    window.addEventListener('copy', onCopy)
+    window.addEventListener('cut', onCut)
+    window.addEventListener('paste', onPaste)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('copy', onCopy)
+      window.removeEventListener('cut', onCut)
+      window.removeEventListener('paste', onPaste)
+    }
+  }, [setObjSel, toast])
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -384,7 +535,7 @@ export default function App() {
 
   const ctx: AppCtx = {
     state, dispatch, tool, setTool, zoom, setZoom, scale, setScale, currentIndex, setCurrentIndex, scrollToPage, scrollRequest, toast,
-    selectedObject, setSelectedObject, editRequest, requestEdit, debug, setDebug: toggleDebug,
+    objSel, setObjSel, selectedObject, setSelectedObject, editRequest, requestEdit, debug, setDebug: toggleDebug,
     showBoxes, setShowBoxes, layoutProvider, setLayoutProvider,
   }
 
@@ -428,7 +579,7 @@ export default function App() {
                 {tool !== 'select' && (
                   <div className="pointer-events-none absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lg">
                     <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{tool === 'add-text' ? 'Add text' : 'Edit'}</span>
-                    {tool === 'add-text' ? 'Click on a page to place a text box · Esc to cancel' : 'Hover to see objects · double-click text to edit · drag to move'}
+                    {tool === 'add-text' ? 'Click on a page to place a text box · Esc to cancel' : 'Drag to move · drag empty space or Shift-click to select several · ⌘C ⌘V · double-click text to edit'}
                   </div>
                 )}
               </div>

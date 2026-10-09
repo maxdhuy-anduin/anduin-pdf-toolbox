@@ -4,6 +4,7 @@ import { useApp } from '../context'
 import { clamp } from '../lib/geom'
 import { displaySize, type PageInfo, type PageModel } from '../lib/model'
 import { getPdfPage, pdfjs } from '../lib/pdfjs'
+import { ContentLayers } from './ContentLayers'
 import { LayoutLayer } from './LayoutLayer'
 import { PageOverlays } from './PageOverlays'
 import { Rotated } from './ui'
@@ -129,6 +130,7 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
           style={{ width: info.width * renderScale, height: info.height * renderScale, transform: k !== 1 ? `scale(${k})` : undefined, pointerEvents: tool === 'select' ? 'auto' : 'none' }}
         />
         {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
+        <ContentLayers page={page} scale={scale} renderScale={renderScale} />
         <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
         {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
       </div>
@@ -258,6 +260,7 @@ export function Viewer() {
             <div
               key={p.id}
               data-page-index={i}
+              data-page-id={p.id}
               style={{ position: 'absolute', top: layout.tops[i], left: (contentW - s.w * scale) / 2, width: s.w * scale, height: s.h * scale }}
               className="bg-white shadow-[0_0_0_1px_rgba(20,20,20,0.10),0_2px_8px_-2px_rgba(20,20,20,0.12)]"
             >

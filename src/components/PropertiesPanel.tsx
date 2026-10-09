@@ -1,4 +1,4 @@
-import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, Italic, Minus, PencilLine, Plus, RotateCcw, Trash2, Underline } from 'lucide-react'
+import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, Copy, Italic, Minus, PencilLine, Plus, RotateCcw, Trash2, Underline } from 'lucide-react'
 import { useApp } from '../context'
 import { CHUNK_COLORS, CHUNK_LEGEND } from './LayoutLayer'
 import { unsupportedChars } from '../lib/fonts'
@@ -27,6 +27,47 @@ function Seg({ active, onClick, label, children }: { active?: boolean; onClick: 
 }
 
 const Label = ({ children }: { children: React.ReactNode }) => <span className="mb-1.5 block font-mono text-[10.5px] uppercase tracking-[0.06em] text-muted">{children}</span>
+/** Several selected objects (or a pasted block): what can be done to them as a group. */
+function SelectionProps({ pageId, keys }: { pageId: string; keys: string[] }) {
+  const { state } = useApp()
+  const page = state.pages.find((p) => p.id === pageId)
+  const content = page ? getCachedContent(page.sourceId, page.srcIndex) : undefined
+  const counts = new Map<string, number>()
+  for (const k of keys) {
+    const label = k.startsWith('o:')
+      ? (content?.objects[k.slice(2)] ? describeObject(content.objects[k.slice(2)]).split(' · ')[0] : 'Object')
+      : page?.overlays.find((o) => o.id === k.slice(2))?.type === 'paste'
+        ? 'Pasted block'
+        : 'Text box'
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  const send = (op: string) => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op } }))
+  return (
+    <div className="space-y-4 p-4">
+      <div>
+        {[...counts].map(([k, n]) => (
+          <Row key={k} k={k} v={n} />
+        ))}
+      </div>
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <Button variant="primary" onClick={() => document.execCommand('copy')}>
+          <Copy size={14} />
+          Copy
+          <span className="ml-auto font-mono text-[10.5px] opacity-70">⌘C</span>
+        </Button>
+        <Button variant="danger" onClick={() => send('delete')}>
+          <Trash2 size={14} />
+          Delete
+          <span className="ml-auto font-mono text-[10.5px] opacity-70">DEL</span>
+        </Button>
+      </div>
+      <p className="text-[12px] leading-relaxed text-muted">
+        Drag any selected object to move them together; arrow keys nudge (Shift = 10 pt). Paste with ⌘V on this page, another page, or a document open in another tab.
+      </p>
+    </div>
+  )
+}
+
 const Row = ({ k, v }: { k: string; v: React.ReactNode }) => (
   <div className="flex justify-between gap-3 border-b border-line-soft py-1.5 text-[12.5px] last:border-0">
     <span className="text-muted">{k}</span>
@@ -35,7 +76,7 @@ const Row = ({ k, v }: { k: string; v: React.ReactNode }) => (
 )
 
 export function PropertiesPanel() {
-  const { state, currentIndex, selectedObject } = useApp()
+  const { state, currentIndex, selectedObject, objSel } = useApp()
   const sel = state.selectedOverlay
   const page = sel ? state.pages.find((p) => p.id === sel.pageId) : undefined
   const overlay = page?.overlays.find((o) => o.id === sel?.overlayId) ?? (state.draft && state.draft.overlay.id === sel?.overlayId ? state.draft.overlay : undefined)
@@ -52,6 +93,9 @@ export function PropertiesPanel() {
   } else if (overlay && page && isText(overlay)) {
     title = overlay.source ? 'Edited text' : 'Text box'
     body = <TextProps overlay={overlay} pageId={page.id} isDraft={isDraft} />
+  } else if (objSel && (objSel.keys.length > 1 || objSel.keys[0]?.startsWith('v:'))) {
+    title = objSel.keys.length > 1 ? `${objSel.keys.length} objects` : 'Pasted content'
+    body = <SelectionProps pageId={objSel.pageId} keys={objSel.keys} />
   } else if (obj && objContent && objPage) {
     title = describeObject(obj)
     body = <ObjectProps o={obj} content={objContent} pageId={objPage.id} />
@@ -81,7 +125,7 @@ function ObjectProps({ o, content, pageId }: { o: ContentObject; content: PageCo
   const { setSelectedObject, requestEdit } = useApp()
   const crumbs: ContentObject[] = []
   for (let p = o.parent ? content.objects[o.parent] : undefined; p; p = p.parent ? content.objects[p.parent] : undefined) crumbs.unshift(p)
-  const del = () => window.dispatchEvent(new CustomEvent('toolbox:delete-object', { detail: { pageId, objectId: o.id } }))
+  const del = () => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op: 'delete' } }))
   return (
     <div className="space-y-4 p-4">
       {crumbs.length > 0 && (

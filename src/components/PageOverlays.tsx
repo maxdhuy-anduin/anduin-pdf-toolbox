@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useApp } from '../context'
 import { clamp, rotateDelta, screenToLocal } from '../lib/geom'
-import { isGraphic, isText, makeTextOverlay, type Overlay, type OverlayPatch, type PageInfo, type PageModel, type TextOverlay } from '../lib/model'
+import { isGraphic, isMove, isPaste, isText, makeTextOverlay, type Overlay, type OverlayPatch, type PageInfo, type PageModel, type TextOverlay } from '../lib/model'
 import { getCachedContent, getPageContent, onContentAnalyzed } from '../lib/content/cache'
 import {
-  describeObject, graphicOverlayFromObject, imageSnapshots, isGraphicObject, isTextObject, snapshotRegion, textOverlayFromObject,
+  describeObject, graphicOverlayFromObject, imageSnapshots, isGraphicObject, isTextObject, OBJECT_LABEL, snapshotRegion, textOverlayFromObject,
 } from '../lib/content/edits'
 import type { Box, ContentObject, PageContent } from '../lib/content/types'
+import { groupBounds, hitItem, marqueeSelect, pageItems, planDelete, planMove, type Item, type OverlayEdits } from '../lib/objects'
 import { GraphicBox } from './GraphicBox'
 import { TextBox } from './TextBox'
 
@@ -37,25 +38,52 @@ export function usePageContent(sourceId: string, srcIndex: number, enabled: bool
   return content
 }
 
-const inBox = (b: Box, x: number, y: number, slop = 0) => x >= b.x - slop && x <= b.x + b.w + slop && y >= b.y - slop && y <= b.y + b.h + slop
+/** On-screen box of a text overlay (its height depends on wrapping, which only the DOM knows). */
+export function measureOverlay(pageId: string, overlayId: string): Box | null {
+  const el = document.querySelector<HTMLElement>(`[data-page-id="${pageId}"] [data-overlay-id="${overlayId}"]`)
+  const layer = el?.closest<HTMLElement>('[data-edit-layer]')
+  if (!el || !layer) return null
+  const k = layer.offsetWidth / Number(layer.dataset.pageWidth || layer.offsetWidth)
+  return { x: el.offsetLeft / k, y: el.offsetTop / k, w: el.offsetWidth / k, h: el.offsetHeight / k }
+}
+
+function itemLabel(it: Item): string {
+  if (it.obj) return describeObject(it.obj)
+  const o = it.overlay!
+  if (isPaste(o)) return o.items.length > 1 ? `Pasted · ${o.items.length} objects` : `Pasted ${OBJECT_LABEL[o.items[0]?.objType]?.toLowerCase() ?? 'content'}`
+  if (isText(o)) return o.source ? 'Edited text' : 'Text box'
+  if (isGraphic(o)) return OBJECT_LABEL[o.source.objType] ?? 'Graphic'
+  return 'Object'
+}
+
+type Press =
+  | { mode: 'drag'; key: string; keys: string[]; sx: number; sy: number; moved: boolean; wasOnlySelection: boolean }
+  | { mode: 'marquee'; start: { x: number; y: number }; base: string[] }
 
 export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }: Props) {
-  const { state, dispatch, tool, setTool, selectedObject, setSelectedObject, editRequest } = useApp()
+  const { state, dispatch, tool, setTool, objSel, setObjSel, setSelectedObject, editRequest, toast } = useApp()
   const layerRef = useRef<HTMLDivElement>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [caretAt, setCaretAt] = useState<{ x: number; y: number } | null>(null)
   const [hover, setHover] = useState<string | null>(null)
-  const [ghost, setGhost] = useState<{ id: string; dx: number; dy: number; src: string | null } | null>(null)
+  const [drag, setDrag] = useState<{ dx: number; dy: number; ghosts: { key: string; b: Box; src: string | null }[] } | null>(null)
+  const [marquee, setMarquee] = useState<Box | null>(null)
   const content = usePageContent(page.sourceId, page.srcIndex, tool === 'edit')
 
   const draft = state.draft && state.draft.pageId === page.id ? state.draft : null
   const overlays: Overlay[] = draft && !page.overlays.some((o) => o.id === draft.overlay.id) ? [...page.overlays, draft.overlay] : page.overlays
   const selOverlay = state.selectedOverlay?.pageId === page.id ? state.selectedOverlay.overlayId : null
-  const selObject = selectedObject?.pageId === page.id ? selectedObject.objectId : null
-  const canvas = () => canvasHolder.current?.querySelector('canvas')
+  const selKeys = useMemo(() => (objSel?.pageId === page.id ? objSel.keys : []), [objSel, page.id])
+  const selSet = useMemo(() => new Set(selKeys), [selKeys])
+  const canvas = () => canvasHolder.current?.querySelector<HTMLCanvasElement>(':scope > canvas')
 
-  // objects already replaced by an edit are no longer hit-testable (their overlay is)
-  const replaced = useMemo(() => new Set(overlays.flatMap((o) => (o.source ? [o.source.objectId] : []))), [overlays])
+  const items = useMemo(
+    () => (tool === 'edit' ? pageItems(content, page.overlays, (id) => measureOverlay(page.id, id)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [content, page.overlays, page.id, tool, scale],
+  )
+  const itemByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items])
+  const selItems = selKeys.map((k) => itemByKey.get(k)).filter((x): x is Item => !!x)
 
   useEffect(() => {
     if (editingId && !overlays.some((o) => o.id === editingId)) setEditingId(null)
@@ -66,9 +94,11 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
     [dispatch, page.id],
   )
   const selectOverlay = (id: string) => {
-    setSelectedObject(null)
+    setObjSel(null)
     dispatch({ type: 'selectOverlay', sel: { pageId: page.id, overlayId: id } })
   }
+  const apply = (r: OverlayEdits, coalesce?: string) =>
+    dispatch({ type: 'editOverlays', pageId: page.id, add: r.add, update: r.update, remove: r.remove, coalesce })
 
   const startEdit = (id: string, at: { x: number; y: number } | null) => {
     selectOverlay(id)
@@ -84,19 +114,27 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
     else if (o.text.trim() === '' && !o.cover && !o.source) dispatch({ type: 'removeOverlay', pageId: page.id, overlayId: o.id })
   }
 
-  // ---- edit a detected object ------------------------------------------------------
+  // ---- edit the text of a detected object -----------------------------------------------
   const editObject = useCallback(
     (objectId: string, at: { x: number; y: number } | null) => {
       if (!content) return
       const o = content.objects[objectId]
       if (!o || !isTextObject(o)) return
-      const ov = textOverlayFromObject(o, content, canvasHolder.current?.querySelector('canvas'))
-      setSelectedObject(null)
+      const ov = textOverlayFromObject(o, content, canvas())
+      // a moved object is edited where it now is (the move becomes part of the edit)
+      const mv = page.overlays.find((x) => isMove(x) && x.source.objectId === objectId)
+      if (mv && isMove(mv)) {
+        ov.x += mv.dx
+        ov.y += mv.dy
+        dispatch({ type: 'editOverlays', pageId: page.id, remove: [mv.id] })
+      }
+      setObjSel(null)
       dispatch({ type: 'startDraft', pageId: page.id, overlay: ov, original: o.text ?? '' })
       setCaretAt(at)
       setEditingId(ov.id)
     },
-    [content, dispatch, page.id, setSelectedObject, canvasHolder],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [content, dispatch, page.id, page.overlays, setObjSel],
   )
 
   useEffect(() => {
@@ -104,139 +142,164 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRequest])
 
-  /** Commit a move/resize/delete of a detected object as an overlay. */
-  const commitObject = (o: ContentObject, change: { dx?: number; dy?: number; box?: Box; deleted?: boolean }) => {
-    if (!content) return
-    const cv = canvas()
-    if (isTextObject(o)) {
-      const ov = textOverlayFromObject(o, content, cv)
-      if (change.deleted) ov.text = ''
-      ov.x += change.dx ?? 0
-      ov.y += change.dy ?? 0
-      if (change.box) {
-        ov.x = change.box.x
-        ov.width = change.box.w
-        ov.wrap = true
-      }
-      dispatch({ type: 'addOverlay', pageId: page.id, overlay: ov })
-      if (change.deleted) dispatch({ type: 'selectOverlay', sel: null })
-    } else if (isGraphicObject(o)) {
-      if (o.type === 'IMAGE' && !imageSnapshots.has(o.id)) {
-        const snap = snapshotRegion(cv, content.width, o.bounds)
-        if (snap) imageSnapshots.set(o.id, snap)
-      }
-      const g = graphicOverlayFromObject(o, content, cv)
-      g.x += change.dx ?? 0
-      g.y += change.dy ?? 0
-      if (change.box) Object.assign(g, { x: change.box.x, y: change.box.y, w: change.box.w, h: change.box.h })
-      g.deleted = !!change.deleted
-      dispatch({ type: 'addOverlay', pageId: page.id, overlay: g })
-      if (change.deleted) dispatch({ type: 'selectOverlay', sel: null })
-    }
-    setSelectedObject(null)
-  }
-
-  // deletion requested from the keyboard / properties panel
+  // ---- keyboard / panel requests: delete, nudge, select all -------------------------------
   useEffect(() => {
-    const onDelete = (e: Event) => {
-      const d = (e as CustomEvent<{ pageId: string; objectId: string }>).detail
-      if (d.pageId !== page.id || !content?.objects[d.objectId]) return
-      commitObject(content.objects[d.objectId], { deleted: true })
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ pageId: string; op: 'delete' | 'nudge' | 'select-all'; dx?: number; dy?: number }>).detail
+      if (d.pageId !== page.id) return
+      if (d.op === 'select-all') {
+        setObjSel({ pageId: page.id, keys: marqueeSelect(items, { x: -1, y: -1, w: info.width + 2, h: info.height + 2 }) })
+        return
+      }
+      if (!selKeys.length) return
+      if (d.op === 'delete') {
+        apply(planDelete(page, content, selKeys, canvas()))
+        setObjSel(null)
+        const n = selKeys.length
+        toast('info', `Deleted ${n} object${n > 1 ? 's' : ''}. Undo with ⌘Z.`)
+      } else {
+        const r = rotateDelta(d.dx ?? 0, d.dy ?? 0, page.rotation)
+        const res = planMove(page, content, selKeys, r.x, r.y, canvas())
+        apply(res, `nudge:${page.id}`)
+        setObjSel({ pageId: page.id, keys: res.keys })
+      }
     }
-    window.addEventListener('toolbox:delete-object', onDelete)
-    return () => window.removeEventListener('toolbox:delete-object', onDelete)
+    window.addEventListener('toolbox:objects', on)
+    return () => window.removeEventListener('toolbox:objects', on)
   })
 
-  // ---- hit testing (cached geometry only) ---------------------------------------------
-  const hitTest = (x: number, y: number): string | null => {
-    if (!content) return null
-    const slop = 4 / scale
-    for (const id of content.hitOrder) {
-      if (replaced.has(id)) continue
-      const o = content.objects[id]
-      if (o.type === 'LINE') {
-        if (inBox(o.bounds, x, y, slop)) return id
-        continue
-      }
-      if (o.type === 'TABLE') {
-        // tables are picked on their outline; the inside belongs to cells
-        const b = o.bounds
-        const near = inBox(b, x, y, slop) && (Math.abs(x - b.x) < slop || Math.abs(x - b.x - b.w) < slop || Math.abs(y - b.y) < slop || Math.abs(y - b.y - b.h) < slop)
-        if (near) return id
-        continue
-      }
-      if (inBox(o.bounds, x, y)) return id
-    }
-    return null
-  }
-
+  // ---- pointer: hover, click, shift-click, marquee, group drag ------------------------------
   const local = (e: { clientX: number; clientY: number }) => {
     const p = screenToLocal(e.clientX, e.clientY, layerRef.current!, page.rotation)
     return { x: p.x / scale, y: p.y / scale }
   }
+  const pressRef = useRef<Press | null>(null)
 
-  const pressRef = useRef<{ id: string; sx: number; sy: number; moved: boolean; resize?: string; box: Box } | null>(null)
+  /** What is currently drawn inside `b` (main canvas + moved/pasted layers), for drag previews. */
+  const snapshotAt = (b: Box): string | null => {
+    const main = canvas()
+    if (!main) return null
+    try {
+      const k = main.width / info.width
+      const c = document.createElement('canvas')
+      c.width = Math.max(1, Math.round(b.w * k))
+      c.height = Math.max(1, Math.round(b.h * k))
+      const ctx = c.getContext('2d')!
+      ctx.drawImage(main, b.x * k, b.y * k, b.w * k, b.h * k, 0, 0, c.width, c.height)
+      const layers = canvasHolder.current?.parentElement?.querySelectorAll<HTMLCanvasElement>('canvas[data-layer]') ?? []
+      for (const l of layers) {
+        const lk = l.width / Number(l.dataset.w)
+        ctx.drawImage(l, (b.x - Number(l.dataset.dx)) * lk, (b.y - Number(l.dataset.dy)) * lk, b.w * lk, b.h * lk, 0, 0, c.width, c.height)
+      }
+      return c.toDataURL('image/png')
+    } catch {
+      return null
+    }
+  }
+
+  const onPointerDownCapture = (e: React.PointerEvent) => {
+    // shift-click on a text box adds it to / removes it from the selection
+    if (tool !== 'edit' || !e.shiftKey) return
+    const id = (e.target as HTMLElement).closest<HTMLElement>('[data-overlay-id]')?.dataset.overlayId
+    if (!id || !itemByKey.has(`v:${id}`)) return
+    e.preventDefault()
+    e.stopPropagation()
+    const key = `v:${id}`
+    setObjSel({ pageId: page.id, keys: selSet.has(key) ? selKeys.filter((k) => k !== key) : [...selKeys, key] })
+  }
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || e.target !== e.currentTarget && !(e.target as HTMLElement).dataset.objHit) return
+    if (e.button !== 0 || e.target !== e.currentTarget) return
     if (tool === 'add-text') return onAddText(e)
-    if (tool !== 'edit' || !content) return
+    if (tool !== 'edit') return
     const p = local(e)
-    const id = hitTest(p.x, p.y)
+    const it = hitItem(items, p.x, p.y, 4 / scale)
     dispatch({ type: 'selectOverlay', sel: null })
-    if (!id) {
-      setSelectedObject(null)
-      return
-    }
     e.preventDefault()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    pressRef.current = { id, sx: e.clientX, sy: e.clientY, moved: false, box: content.objects[id].bounds }
+    if (!it) {
+      pressRef.current = { mode: 'marquee', start: p, base: e.shiftKey ? selKeys : [] }
+      if (!e.shiftKey) setObjSel(null)
+      return
+    }
+    if (e.shiftKey) {
+      setObjSel({ pageId: page.id, keys: selSet.has(it.key) ? selKeys.filter((k) => k !== it.key) : [...selKeys, it.key] })
+      pressRef.current = null
+      return
+    }
+    const keys = selSet.has(it.key) ? selKeys : [it.key]
+    if (!selSet.has(it.key)) setObjSel({ pageId: page.id, keys })
+    pressRef.current = { mode: 'drag', key: it.key, keys, sx: e.clientX, sy: e.clientY, moved: false, wasOnlySelection: selKeys.length === 1 && selKeys[0] === it.key }
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (tool !== 'edit' || !content) return
+    if (tool !== 'edit') return
     const pr = pressRef.current
-    if (pr) {
+    if (pr?.mode === 'marquee') {
+      const p = local(e)
+      setMarquee({ x: Math.min(p.x, pr.start.x), y: Math.min(p.y, pr.start.y), w: Math.abs(p.x - pr.start.x), h: Math.abs(p.y - pr.start.y) })
+      return
+    }
+    if (pr?.mode === 'drag') {
       if (!pr.moved && Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < 4) return
-      const o = content.objects[pr.id]
-      if (!o.editable || o.type === 'TABLE') return
+      const d = rotateDelta(e.clientX - pr.sx, e.clientY - pr.sy, page.rotation)
       if (!pr.moved) {
         pr.moved = true
-        setGhost({ id: pr.id, dx: 0, dy: 0, src: snapshotRegion(canvas(), content.width, o.bounds) })
+        const ghosts = pr.keys.map((k) => itemByKey.get(k)).filter((x): x is Item => !!x).map((it) => ({ key: it.key, b: it.bounds, src: snapshotAt(it.bounds) }))
+        setDrag({ dx: d.x / scale, dy: d.y / scale, ghosts })
+        return
       }
-      const d = rotateDelta(e.clientX - pr.sx, e.clientY - pr.sy, page.rotation)
-      setGhost((g) => (g ? { ...g, dx: d.x / scale, dy: d.y / scale } : g))
+      setDrag((g) => (g ? { ...g, dx: d.x / scale, dy: d.y / scale } : g))
       return
     }
     const p = local(e)
-    setHover(hitTest(p.x, p.y))
+    setHover(hitItem(items, p.x, p.y, 4 / scale)?.key ?? null)
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
     const pr = pressRef.current
     pressRef.current = null
-    if (!pr || !content) return
-    const o = content.objects[pr.id]
-    if (pr.moved && ghost) {
-      if (o.type === 'IMAGE' && ghost.src) imageSnapshots.set(o.id, ghost.src)
-      commitObject(o, { dx: ghost.dx, dy: ghost.dy })
-      setGhost(null)
+    if (!pr) return
+    if (pr.mode === 'marquee') {
+      const r = marquee
+      setMarquee(null)
+      if (r && r.w * scale > 3 && r.h * scale > 3) {
+        const picked = marqueeSelect(items, r)
+        setObjSel({ pageId: page.id, keys: [...new Set([...pr.base, ...picked])] })
+      }
       return
     }
-    setGhost(null)
-    // click: select, or (when already selected) start editing text at the caret
-    if (selObject === pr.id && isTextObject(o)) editObject(pr.id, { x: e.clientX, y: e.clientY })
-    else setSelectedObject({ pageId: page.id, objectId: pr.id })
+    if (pr.moved && drag) {
+      const keys = pr.keys
+      for (const k of keys) {
+        const it = itemByKey.get(k)
+        if (it?.obj?.type === 'IMAGE' && !imageSnapshots.has(it.obj.id)) {
+          const g = drag.ghosts.find((x) => x.key === k)
+          if (g?.src) imageSnapshots.set(it.obj.id, g.src)
+        }
+      }
+      const res = planMove(page, content, keys, drag.dx, drag.dy, canvas())
+      apply(res)
+      setObjSel({ pageId: page.id, keys: res.keys })
+      setDrag(null)
+      return
+    }
+    setDrag(null)
+    // a click on one member of a multi-selection narrows the selection to it;
+    // a click on the only selected text object starts editing it
+    const it = itemByKey.get(pr.key)
+    if (pr.keys.length > 1) setObjSel({ pageId: page.id, keys: [pr.key] })
+    else if (pr.wasOnlySelection && it?.obj && isTextObject(it.obj)) editObject(it.obj.id, { x: e.clientX, y: e.clientY })
   }
 
   const onDoubleClick = (e: React.MouseEvent) => {
     if (tool !== 'edit' || !content) return
     const p = local(e)
-    const id = hitTest(p.x, p.y)
-    if (id && isTextObject(content.objects[id])) editObject(id, { x: e.clientX, y: e.clientY })
+    const it = hitItem(items, p.x, p.y, 4 / scale)
+    if (it?.obj && isTextObject(it.obj)) editObject(it.obj.id, { x: e.clientX, y: e.clientY })
   }
 
-  // resize handles on a selected (unchanged) object
+  // ---- resize handles on a single, not yet moved object (redrawn as an overlay) ------------
   const resizeRef = useRef<{ id: string; side: string; sx: number; sy: number; box: Box } | null>(null)
   const [resizeBox, setResizeBox] = useState<Box | null>(null)
   const onHandleDown = (e: React.PointerEvent, id: string, side: string) => {
@@ -262,8 +325,26 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   const onHandleUp = () => {
     const r = resizeRef.current
     resizeRef.current = null
-    if (r && resizeBox && content) commitObject(content.objects[r.id], { box: resizeBox })
+    if (r && resizeBox && content) resizeObject(content.objects[r.id], resizeBox)
     setResizeBox(null)
+  }
+  const resizeObject = (o: ContentObject, box: Box) => {
+    if (!content) return
+    const cv = canvas()
+    if (isTextObject(o)) {
+      const ov = textOverlayFromObject(o, content, cv)
+      Object.assign(ov, { x: box.x, width: box.w, wrap: true })
+      dispatch({ type: 'addOverlay', pageId: page.id, overlay: ov })
+    } else if (isGraphicObject(o)) {
+      if (o.type === 'IMAGE' && !imageSnapshots.has(o.id)) {
+        const snap = snapshotRegion(cv, content.width, o.bounds)
+        if (snap) imageSnapshots.set(o.id, snap)
+      }
+      const g = graphicOverlayFromObject(o, content, cv)
+      Object.assign(g, { x: box.x, y: box.y, w: box.w, h: box.h })
+      dispatch({ type: 'addOverlay', pageId: page.id, overlay: g })
+    }
+    setSelectedObject(null)
   }
 
   // ---- add text -----------------------------------------------------------------------
@@ -282,22 +363,26 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
 
   // ---- render -------------------------------------------------------------------------
   const S = (b: Box, pad = 0): React.CSSProperties => ({ left: (b.x - pad) * scale, top: (b.y - pad) * scale, width: (b.w + 2 * pad) * scale, height: (b.h + 2 * pad) * scale })
-  const hovered = hover && content && !replaced.has(hover) && hover !== selObject ? content.objects[hover] : null
-  const selected = selObject && content?.objects[selObject] && !replaced.has(selObject) ? content.objects[selObject] : null
+  const hovered = hover && !selSet.has(hover) && !drag ? itemByKey.get(hover) : undefined
+  const single = selItems.length === 1 ? selItems[0] : null
+  const group = selItems.length > 1 ? groupBounds(selItems) : null
   const interactive = tool === 'edit' || tool === 'select'
+  const handlesFor = single?.obj && !single.move && single.obj.editable && single.obj.type !== 'TABLE' && !drag ? single.obj : null
+  const tableOf = (cell: ContentObject) => (cell.parent ? content?.objects[content.objects[cell.parent]?.parent ?? ''] : undefined)
 
   return (
     <>
       {/* hide originals: exact (operators skipped in the render) or with a sampled-colour cover */}
       <div className="pointer-events-none absolute inset-0" style={{ zIndex: 2 }}>
         {overlays.map((o) => {
+          if (isMove(o) || isPaste(o)) return null
           const hiddenExactly = o.source?.exclusive && o.source.ops.every((op) => renderedHidden.has(op))
           if (hiddenExactly) return null
           if (isText(o) && o.cover) return <div key={`c-${o.id}`} style={{ position: 'absolute', ...S(o.cover), background: o.cover.color }} />
           if (isGraphic(o)) return <div key={`c-${o.id}`} style={{ position: 'absolute', ...S(o.source.bounds, 1), background: o.coverColor }} />
           return null
         })}
-        {ghost && content?.objects[ghost.id] && <div style={{ position: 'absolute', ...S(content.objects[ghost.id].bounds, 1), background: '#ffffff', opacity: 0.85 }} />}
+        {drag?.ghosts.map((g) => <div key={`gc-${g.key}`} style={{ position: 'absolute', ...S(g.b, 1), background: '#ffffff', opacity: 0.85 }} />)}
       </div>
 
       <div className="pointer-events-none absolute inset-0" style={{ zIndex: 3 }}>
@@ -307,7 +392,7 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
             overlay={o}
             scale={scale}
             rotation={page.rotation}
-            selected={selOverlay === o.id}
+            selected={selOverlay === o.id || selSet.has(`v:${o.id}`)}
             interactive={interactive}
             onSelect={() => selectOverlay(o.id)}
             onChange={(patch, key) => update(o.id, patch, key)}
@@ -315,58 +400,70 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
         ))}
       </div>
 
-      {/* Edit mode: object hover / select / drag over cached geometry */}
+      {/* Edit mode: hover / select / marquee / drag over cached geometry */}
       <div
         ref={layerRef}
+        data-edit-layer
+        data-page-width={info.width}
         className="absolute inset-0"
-        style={{ zIndex: 4, pointerEvents: tool === 'edit' || tool === 'add-text' ? 'auto' : 'none', cursor: tool === 'add-text' ? 'text' : hovered ? (isTextObject(hovered) ? 'text' : 'move') : undefined, touchAction: 'none' }}
+        style={{
+          zIndex: 4,
+          pointerEvents: tool === 'edit' || tool === 'add-text' ? 'auto' : 'none',
+          cursor: tool === 'add-text' ? 'text' : drag ? 'grabbing' : hovered || (hover && selSet.has(hover)) ? 'move' : undefined,
+          touchAction: 'none',
+        }}
+        onPointerDownCapture={onPointerDownCapture}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={() => setHover(null)}
         onDoubleClick={onDoubleClick}
       >
-        {tool === 'edit' && content && (
+        {tool === 'edit' && (
           <>
             {hovered && (
               <>
-                {hovered.type === 'TABLE_CELL' && hovered.parent && content.objects[content.objects[hovered.parent].parent ?? ''] && (
-                  <div className="obj-hover dashed" style={S(content.objects[content.objects[hovered.parent].parent!].bounds)} />
+                {hovered.obj?.type === 'TABLE_CELL' && tableOf(hovered.obj) && (
+                  <div className="obj-hover dashed" style={S(itemByKey.get(`o:${tableOf(hovered.obj)!.id}`)?.bounds ?? tableOf(hovered.obj)!.bounds)} />
                 )}
-                <div className="obj-hover" style={S(hovered.bounds, hovered.type === 'LINE' ? 2 : 1)} />
-                <ObjectTag o={hovered} style={{ left: hovered.bounds.x * scale, top: hovered.bounds.y * scale - 18 }} />
+                <div className="obj-hover" style={S(hovered.bounds, hovered.obj?.type === 'LINE' ? 2 : 1)} />
+                <Tag text={itemLabel(hovered)} style={{ left: hovered.bounds.x * scale, top: hovered.bounds.y * scale - 18 }} />
               </>
             )}
-            {selected && !ghost && (
+            {!drag && selItems.map((it) => <div key={`s-${it.key}`} className="obj-selected" style={S(it === single && resizeBox ? resizeBox : it.bounds, 2)} />)}
+            {group && !drag && (
               <>
-                <div className="obj-selected" style={S(resizeBox ?? selected.bounds, 2)} />
-                {selected.editable && selected.type !== 'TABLE' && (
-                  (selected.type === 'LINE' ? (selected.bounds.w >= selected.bounds.h ? ['w', 'e'] : ['n', 's']) : isTextObject(selected) ? ['w', 'e'] : ['nw', 'ne', 'sw', 'se']).map((side) => {
-                    const b = resizeBox ?? selected.bounds
-                    const px = side.includes('w') ? b.x - 2 : side.includes('e') ? b.x + b.w + 2 : b.x + b.w / 2
-                    const py = side.includes('n') ? b.y - 2 : side.includes('s') ? b.y + b.h + 2 : b.y + b.h / 2
-                    return (
-                      <div
-                        key={side}
-                        className="handle"
-                        style={{ left: px * scale - 4, top: py * scale - 4, cursor: side === 'w' || side === 'e' ? 'ew-resize' : side === 'n' || side === 's' ? 'ns-resize' : side === 'nw' || side === 'se' ? 'nwse-resize' : 'nesw-resize' }}
-                        onPointerDown={(e) => onHandleDown(e, selected.id, side)}
-                        onPointerMove={onHandleMove}
-                        onPointerUp={onHandleUp}
-                      />
-                    )
-                  })
-                )}
+                <div className="pointer-events-none absolute" style={{ ...S(group, 5), outline: '1px dashed #1075dc' }} />
+                <Tag text={`${selItems.length} objects · drag to move together`} style={{ left: (group.x - 5) * scale, top: (group.y - 5) * scale - 18 }} dark />
               </>
             )}
-            {ghost && content.objects[ghost.id] && (
+            {single && !drag && !hovered && <Tag text={itemLabel(single)} style={{ left: single.bounds.x * scale, top: single.bounds.y * scale - 18 }} dark />}
+            {handlesFor &&
+              (handlesFor.type === 'LINE' ? (handlesFor.bounds.w >= handlesFor.bounds.h ? ['w', 'e'] : ['n', 's']) : isTextObject(handlesFor) ? ['w', 'e'] : ['nw', 'ne', 'sw', 'se']).map((side) => {
+                const b = resizeBox ?? handlesFor.bounds
+                const px = side.includes('w') ? b.x - 2 : side.includes('e') ? b.x + b.w + 2 : b.x + b.w / 2
+                const py = side.includes('n') ? b.y - 2 : side.includes('s') ? b.y + b.h + 2 : b.y + b.h / 2
+                return (
+                  <div
+                    key={side}
+                    className="handle"
+                    style={{ left: px * scale - 4, top: py * scale - 4, cursor: side === 'w' || side === 'e' ? 'ew-resize' : side === 'n' || side === 's' ? 'ns-resize' : side === 'nw' || side === 'se' ? 'nwse-resize' : 'nesw-resize' }}
+                    onPointerDown={(e) => onHandleDown(e, handlesFor.id, side)}
+                    onPointerMove={onHandleMove}
+                    onPointerUp={onHandleUp}
+                  />
+                )
+              })}
+            {drag?.ghosts.map((g) => (
               <div
+                key={`g-${g.key}`}
                 className="pointer-events-none absolute"
-                style={{ ...S(content.objects[ghost.id].bounds), transform: `translate(${ghost.dx * scale}px, ${ghost.dy * scale}px)`, outline: '1.5px solid #1075dc', opacity: 0.92 }}
+                style={{ ...S(g.b), transform: `translate(${drag.dx * scale}px, ${drag.dy * scale}px)`, outline: '1.5px solid #1075dc', opacity: 0.92 }}
               >
-                {ghost.src && <img src={ghost.src} alt="" style={{ width: '100%', height: '100%' }} draggable={false} />}
+                {g.src && <img src={g.src} alt="" style={{ width: '100%', height: '100%' }} draggable={false} />}
               </div>
-            )}
+            ))}
+            {marquee && <div className="pointer-events-none absolute" style={{ ...S(marquee), outline: '1px dashed #1075dc', background: 'rgba(63,166,238,0.08)' }} />}
           </>
         )}
         {overlays.filter(isText).map((o) => (
@@ -375,7 +472,7 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
             overlay={o}
             scale={scale}
             rotation={page.rotation}
-            selected={selOverlay === o.id}
+            selected={selOverlay === o.id || selSet.has(`v:${o.id}`)}
             editing={editingId === o.id}
             caretAt={editingId === o.id ? caretAt : null}
             onSelect={() => selectOverlay(o.id)}
@@ -385,15 +482,14 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
           />
         ))}
       </div>
-
     </>
   )
 }
 
-function ObjectTag({ o, style }: { o: ContentObject; style: React.CSSProperties }) {
+function Tag({ text, style, dark }: { text: string; style: React.CSSProperties; dark?: boolean }) {
   return (
-    <div className="pointer-events-none absolute z-10 whitespace-nowrap bg-sky px-1.5 py-[1px] font-mono text-[10px] font-medium uppercase tracking-wide text-white" style={style}>
-      {describeObject(o)}
+    <div className={`pointer-events-none absolute z-10 whitespace-nowrap px-1.5 py-[1px] font-mono text-[10px] font-medium uppercase tracking-wide text-white ${dark ? 'bg-sky-deep' : 'bg-sky'}`} style={style}>
+      {text}
     </div>
   )
 }

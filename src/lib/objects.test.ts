@@ -100,3 +100,63 @@ describe('paste', () => {
     for (const o of others.filter((x) => !before.includes(x.text!.slice(0, 25)))) expect(text).not.toContain(o.text!.slice(0, 25))
   })
 })
+
+describe('selection model', () => {
+  it('marquee picks a table only when fully enclosed, otherwise the cells it touches', async () => {
+    const { pageItems, marqueeSelect } = await import('./objects')
+    const c = await analyze(suite, 3)
+    const items = pageItems(c, [])
+    const table = of(c, (o) => o.type === 'TABLE')[0]
+    const all = marqueeSelect(items, { x: table.bounds.x - 5, y: table.bounds.y - 5, w: table.bounds.w + 10, h: table.bounds.h + 10 })
+    expect(all).toContain(`o:${table.id}`)
+    expect(all.some((k) => k.includes('c0_'))).toBe(false) // cells come with the table
+    const part = marqueeSelect(items, { x: table.bounds.x + 1, y: table.bounds.y + 1, w: 40, h: 10 })
+    expect(part).not.toContain(`o:${table.id}`)
+    expect(part.length).toBeGreaterThan(0)
+  })
+
+  it('moves a mixed selection rigidly in one undo step', async () => {
+    const { pageItems, planMove } = await import('./objects')
+    const { reducer, initialState } = await import('./model')
+    const c = await analyze(suite, 3)
+    const table = of(c, (o) => o.type === 'TABLE')[0]
+    const heading = of(c, (o) => o.type === 'TEXT_BLOCK' && o.role === 'heading')[0]
+    const page = makePage('suite', 3)
+    let st = reducer(initialState, { type: 'load', source: meta, fileName: 'suite.pdf' })
+    st = { ...st, pages: st.pages.map((p, i) => (i === 3 ? { ...p, id: page.id } : p)) }
+    const keys = [`o:${table.id}`, `o:${heading.id}`]
+    const r1 = planMove(st.pages[3], c, keys, 10, 50)
+    st = reducer(st, { type: 'editOverlays', pageId: page.id, add: r1.add, update: r1.update, remove: r1.remove })
+    expect(st.past).toHaveLength(1)
+    const moves = st.pages[3].overlays
+    expect(moves.length).toBe(1 + 1 + table.rows! * table.cols!) // table, heading, every cell
+    expect(moves.every((m) => m.type === 'move' && m.dx === 10 && m.dy === 50)).toBe(true)
+    // moving again updates the same overlays (offsets accumulate)
+    const r2 = planMove(st.pages[3], c, keys, -10, 5)
+    expect(r2.add).toHaveLength(0)
+    st = reducer(st, { type: 'editOverlays', pageId: page.id, update: r2.update })
+    expect(st.pages[3].overlays.every((m) => m.type === 'move' && m.dx === 0 && m.dy === 55)).toBe(true)
+    const items = pageItems(c, st.pages[3].overlays)
+    expect(items.find((i) => i.key === `o:${heading.id}`)!.bounds.y).toBeCloseTo(heading.bounds.y + 55)
+    st = reducer(st, { type: 'undo' })
+    expect(st.pages[3].overlays.every((m) => m.type === 'move' && m.dy === 50)).toBe(true)
+  })
+
+  it('copies with positions relative to the selection top-left', async () => {
+    const { pageItems, copySelection } = await import('./objects')
+    const c = await analyze(suite, 0)
+    const paras = of(c, (o) => o.type === 'TEXT_BLOCK' && o.role === 'paragraph').slice(0, 2)
+    const page = makePage('suite', 0)
+    const items = pageItems(c, [])
+    const sel = copySelection(page, c, items, paras.map((p) => `o:${p.id}`))!
+    expect(sel.origin).toEqual({ x: Math.min(...paras.map((p) => p.bounds.x)), y: paras[0].bounds.y })
+    expect(sel.groups).toHaveLength(1)
+    const g = sel.groups[0]
+    // pasting at T draws item i at item.bounds + shift + T, i.e. same layout relative to T
+    const T = { x: 300, y: 500 }
+    const placed = g.items.map((i) => ({ x: i.bounds.x + g.shift.x + T.x, y: i.bounds.y + g.shift.y + T.y }))
+    expect(placed[0].y).toBeCloseTo(T.y)
+    expect(placed[1].y - placed[0].y).toBeCloseTo(paras[1].bounds.y - paras[0].bounds.y)
+    expect(sel.text).toContain(paras[0].text!.slice(0, 20))
+  })
+})

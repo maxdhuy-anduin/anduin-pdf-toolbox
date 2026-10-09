@@ -318,7 +318,7 @@ export type Action =
   | { type: 'updateOverlay'; pageId: string; overlayId: string; patch: OverlayPatch; coalesce?: string }
   | { type: 'removeOverlay'; pageId: string; overlayId: string }
   /** Several overlay changes on one page as a single undo step (group move / delete / paste). */
-  | { type: 'editOverlays'; pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[] }
+  | { type: 'editOverlays'; pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[]; coalesce?: string }
   | { type: 'startDraft'; pageId: string; overlay: TextOverlay; original: string | null }
   | { type: 'discardDraft' }
   | { type: 'setSelection'; ids: string[] }
@@ -443,7 +443,7 @@ export function reducer(state: DocState, action: Action): DocState {
             }
           : p,
       )
-      return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) })
+      return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) }, action.coalesce)
     }
     case 'startDraft':
       return { ...state, draft: { pageId: action.pageId, overlay: action.overlay, original: action.original }, selectedOverlay: { pageId: action.pageId, overlayId: action.overlay.id } }

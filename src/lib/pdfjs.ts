@@ -46,6 +46,8 @@ export const getSourceBytes = (id: string): Uint8Array => {
   return r.bytes
 }
 
+export const hasSource = (id: string) => registry.has(id)
+
 export const getPageCount = (id: string): number => registry.get(id)?.pdf.numPages ?? 0
 
 export function getPdfPage(sourceId: string, index: number): Promise<PDFPageProxy> {

@@ -1,7 +1,7 @@
 # Layout-object architecture (v3)
 
-Status: Phases 1–2 implemented (normalized layout model, providers, bounding-box overlay, object tree). Phases 3–11 are
-planned below. Baseline before this work: git tag `v0.2-edit-mode`.
+Status: Phases 1–7 and 9 implemented (layout model, bounding boxes, hover/selection, marquee + Shift-click, rigid group
+moves incl. tables, delete, copy/paste, cross-tab paste). Phase 8 (in-app document tabs), 10 (Word → PDF) and 11 remain. Baseline before this work: git tag `v0.2-edit-mode`.
 
 ---
 
@@ -66,14 +66,14 @@ architecture, thumbnails, page operations, the Anduin UI kit, the layout test su
 | Phase | Change |
 |---|---|
 | 1 ✅ | `lib/layout/types.ts` (LayoutChunk model), `fromContent.ts` (local adapter, adds HEADING/PARAGRAPH/LIST/LIST_ITEM semantics and LIST grouping), `basic.ts` (fallback), `adobe.ts` (Adobe adapter, pure + tested), `provider.ts` (provider interface, local + Adobe providers), `cache.ts`, `tree.ts`. `lib/coords.ts`: `pdfToCanvas` / `canvasToPdf` / `canvasToScreen` / `screenToCanvas`. |
-| 2 ✅ | `components/LayoutLayer.tsx` (bounding boxes, debug inspector, tree highlight; replaces `DebugLayer`), `components/ObjectTreePanel.tsx`. Toolbar toggle **Show bounding boxes** (B), ⋯ menu: Show detected objects (⇧⌘D), Show object tree, layout engine. `npm run analyze` prints the chunk tree. |
-| 3 | Edit-mode hit-testing on `LayoutPage.hitOrder` with hierarchy cycling (click = innermost meaningful object; Esc/⌥-click = parent: cell → row → table). Spatial grid index if a page has > 2k chunks. |
-| 4 | `selectedIds: string[]` per document (context, not undo history); marquee rubber band; Shift-click toggle. |
-| 5 | `GroupSelectionBounds`; rigid group drag. Implementation: one `moveChunks{ids, dx, dy}` reducer action that turns each selected source chunk into the existing overlays (text keeps its line breaks: `wrap=false`, `lineBreaks` from `hardBreaks` + soft wraps; graphics translate). Children move with their parent; no reflow. |
-| 6 | Delete for any selection (existing per-object delete generalized). |
-| 7 | `PDFBlockPayload` clipboard: chunks normalized to the selection's top-left; paste = inserted chunks rendered as overlays (+20/+20 in the same document). |
+| 2 ✅ | `components/LayoutLayer.tsx` (bounding boxes, debug inspector; replaces `DebugLayer`). Toolbar toggle **Show bounding boxes** (B), ⋯ menu: Show detected objects (⇧⌘D), layout engine. `npm run analyze` prints the chunk tree. (An object-tree panel was built and removed again: it didn't help editing.) |
+| 3 ✅ | Edit-mode hit-testing on `LayoutPage.hitOrder` with hierarchy cycling (click = innermost meaningful object; Esc/⌥-click = parent: cell → row → table). Spatial grid index if a page has > 2k chunks. |
+| 4 ✅ | `selectedIds: string[]` per document (context, not undo history); marquee rubber band; Shift-click toggle. |
+| 5 ✅ | `GroupSelectionBounds`; rigid group drag. Implementation: one `moveChunks{ids, dx, dy}` reducer action that turns each selected source chunk into the existing overlays (text keeps its line breaks: `wrap=false`, `lineBreaks` from `hardBreaks` + soft wraps; graphics translate). Children move with their parent; no reflow. |
+| 6 ✅ | Delete for any selection (existing per-object delete generalized). |
+| 7 ✅ | `PDFBlockPayload` clipboard: chunks normalized to the selection's top-left; paste = inserted chunks rendered as overlays (+20/+20 in the same document). |
 | 8 | `DocumentTab[]`: each tab owns its `DocState` (already self-contained: sources, pages, history). PDF.js registry is already keyed by source id, so tabs share it. |
-| 9 | App-level clipboard + `BroadcastChannel('anduin-pdf-clipboard')` for other browser tabs, `navigator.clipboard` writing plain text + `web application/x-pdf-blocks+json` where supported. |
+| 9 ✅ | App-level clipboard + `BroadcastChannel('anduin-pdf-clipboard')` for other browser tabs, `navigator.clipboard` writing plain text + `web application/x-pdf-blocks+json` where supported. |
 | 10 | Word → PDF (see §H). |
 | 11 | Polish, tests, README. |
 
@@ -133,6 +133,12 @@ intrinsic `/Rotate` applied; independent of zoom and of rotation added in the ap
 - `canvasToScreen(pt, view)` / `screenToCanvas(pt, view)`: canonical ↔ on-screen pixels for a zoom + app rotation
 
 ## G. Non-destructive export
+
+*As built:* moves and deletes of detected objects are `MoveOverlay`s (object reference + offset / deleted flag); pastes are
+`PasteOverlay`s (source page + object references + offset). Export removes the originals from the content stream, then cuts
+the source page down to the moved / pasted objects (`keepOnly`) and stamps it as a Form XObject at the new position. On
+screen the same objects are drawn by PDF.js with every other painting operator filtered out (`ContentLayers.tsx`).
+Group moves use one `editOverlays` reducer action, so a group move is one undo step. The design below was the plan.
 
 The edit model stays *original bytes + a list of operations*. Today the operations are overlays with a `source` link.
 Phase 5+ formalizes them per page:

@@ -6,7 +6,8 @@ lines, rectangles, images), then **export a real PDF**. Hackathon MVP, not an Ac
 
 **Privacy:** everything runs in the browser. There is no backend, no upload, no analytics and no third-party requests
 (PDF.js assets and the Manrope / IBM Plex Mono fonts are served locally). Documents are never written to storage; the only
-things remembered locally are the view toggles (boxes, tree, debug). The optional Adobe Extract provider is off unless
+things remembered locally are the view toggles (boxes, debug). Copied objects stay in memory and are shared only with this
+app's other open tabs (BroadcastChannel); they are never written to disk. The optional Adobe Extract provider is off unless
 `VITE_LAYOUT_SERVICE_URL` points at your own backend; it is never called by default.
 
 ## Run it
@@ -28,15 +29,17 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
 4. **Insert PDF** → *Use sample supplement* → untick page 2 → "After page 2" → **Insert**.
 5. **Edit** (E) on the Terms page: hover, and paragraphs, cells, the table outline and rules light up as objects.
    Double-click the `$500,000,000` cell, type `$750,000,000`, Esc. Drag the intro paragraph somewhere else.
+   Grab a table by its border and drag it: rules, cells and fills move as one, drawn exactly as before.
+   Drag across empty space to select several objects (or Shift-click), then drag one of them: they move together.
+   ⌘C / ⌘V duplicates them (+20 pt); open another PDF in a second browser tab and ⌘V pastes them there.
 6. **Add Text** (T) → click the page, type a correction; make it bold in the right panel.
 7. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
 
 **Seeing the layout model:** **Boxes** in the toolbar (or `B`, or `?boxes`) outlines every detected object by type: headings,
-paragraphs, lists, tables, cells, rules, rectangles and images. **Tree** (or `?tree`) shows the current page's object tree;
-hovering a row highlights the object on the page, and clicking pins it (in Edit mode it also selects it). **⋯ → Show detected
-objects** (⇧⌘D, `?debug`) adds text lines and spans plus an inspector: id, type, bbox, page, text, font, size, parent,
-children and source operators. **⋯ → Open layout test suite** loads a synthetic 9-page PDF covering the layouts below.
-`npm run analyze -- suite 7` prints the same tree in the terminal.
+paragraphs, lists, tables, cells, rules, rectangles and images. **⋯ → Show detected objects** (⇧⌘D, `?debug`) adds text lines
+and spans plus an inspector: id, type, bbox, page, text, font, size, parent, children and source operators. **⋯ → Open layout
+test suite** loads a synthetic 9-page PDF covering the layouts below. `npm run analyze -- suite 7` prints the object tree in
+the terminal.
 
 ## Architecture
 
@@ -63,7 +66,10 @@ Export    ─ pdf-lib copies pages ─► pageEdit.ts rewrites each page's conte
 | Layout providers: local (default) and Adobe Extract via a backend (off unless configured), with fallback | `src/lib/layout/provider.ts`, `cache.ts` |
 | Adapters: analyzer → chunks, PDF.js text → chunks (fallback), Adobe JSON → chunks | `src/lib/layout/fromContent.ts`, `basic.ts`, `adobe.ts` |
 | Canonical coordinates: `pdfToCanvas` / `canvasToPdf` / `canvasToScreen` / `screenToCanvas` | `src/lib/coords.ts` |
-| Bounding boxes, inspector, object tree | `src/components/LayoutLayer.tsx`, `ObjectTreePanel.tsx` |
+| Bounding boxes, inspector | `src/components/LayoutLayer.tsx` |
+| Selection, marquee, group move / delete, copy (pure logic) | `src/lib/objects.ts` |
+| Clipboard (in memory, shared across tabs) | `src/lib/clipboard.ts` |
+| Moved / pasted objects on screen (PDF.js render of only their operators) | `src/components/ContentLayers.tsx` |
 | Content object model (analyzer output) | `src/lib/content/types.ts` |
 | Low-level extraction from PDF.js (CTM stack, text state, colours, paths, images, font names) | `src/lib/content/extract.ts` |
 | Content analyzer (lines, blocks, roles, columns, lists, tables, graphics, op ownership) | `src/lib/content/analyze.ts` |
@@ -103,6 +109,13 @@ locate each edited object's painting operators in PDF user space, then:
 - **rules/rectangles**: the path, or only the matching sub-path, is removed (moved ones are redrawn)
 - **images**: removed, or wrapped in a new `cm` so the original image stream is reused (no re-encoding)
 
+**Moving, copying and pasting** never re-typesets anything. A moved object is a `MoveOverlay` (object id + offset): on screen
+its operators are skipped in the page render and drawn again, alone, at the offset; on export they are removed from the page
+and the source page is cut down to just those objects (`keepOnly`) and stamped at the new position as a Form XObject. Same
+fonts, same line breaks, same vectors, still selectable text. A paste is the same stamp, from a copy of the source page that
+travels with the clipboard, so pasting into another document works. A table owns every path drawn inside it, so it moves
+with its rules and fills.
+
 If an object cannot be matched safely (content inside a Form XObject, or a text operator shared with neighbouring content),
 that object falls back to a cover filled with the sampled background colour. The export toast reports the split.
 
@@ -114,7 +127,12 @@ that object falls back to a cover filled with the sampled background colour. The
 - Paragraph edits reflow within the original width; if the fallback font is wider, line breaks can differ.
 - Detection is heuristic and tuned on digitally generated business documents. Merged/spanning table cells, rotated text
   and complex vector art are not modelled. Content inside Form XObjects is detected but exported via covers.
-- Moved images keep their original paint order in the exported PDF (on screen they are drawn on top while editing).
+- Moved and pasted objects are drawn on top of the page's other content (moved images keep their paint order on export).
+- Content inside Form XObjects, and text whose drawing operator also draws neighbouring text, can't be moved as-is: such text is
+  re-typeset in a standard font (as an edit would be), and anything else is left in place with a warning on export.
+- Resize handles apply to a single object that has not been moved yet; groups move but don't scale.
+- Cross-document paste works between tabs of this app in the same browser profile (both tabs open). In-app document tabs
+  are not built yet.
 - Export rebuilds the document with pdf-lib: page content, links and images are kept, document-level features are not
   (form fields, bookmarks, tags, signatures).
 - Password-protected PDFs are rejected with a clear message. Scanned pages: viewing and page operations work; Edit is
@@ -122,13 +140,16 @@ that object falls back to a cover filled with the sampled background colour. The
 
 ## Shortcuts
 
-`V` select · `E` edit · `T` add text · `Enter` edit the selected object · `Del` delete the selected object / text box /
-pages · `Esc` deselect · arrows nudge a selected text box · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
+`V` select · `E` edit · `T` add text · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
+on the page, `⌘/Ctrl+C` `X` `V` copy / cut / paste, arrows nudge the selection (`Shift` = 10 pt) · `Enter` edit the selected
+object · `Del` delete the selected objects / text box / pages · `Esc` deselect · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
 `⌘/Ctrl+O` open · `B` bounding boxes · `⇧⌘D` debug view.
 
 ## Verification status
 
-Automated (`npm test`, 90 tests): layout model (canonical coordinates at every rotation, local adapter tree consistency,
+Automated (`npm test`, 97 tests): rigid moves (whole ruled table moved: same cell text, font and size at the new place,
+nothing left behind; paragraph moved + another deleted; table deleted completely), paste from another page (original font,
+only the copied object), marquee rules, group move in one undo step, clipboard positions relative to the selection; layout model (canonical coordinates at every rotation, local adapter tree consistency,
 headings/levels, list grouping, table grid, Adobe adapter on a synthetic Extract sample incl. row/col spans, fallback);
 analyzer on the 9-page layout suite and the fund sample (paragraphs, justification,
 headings, two columns, lists, headers/footers, fonts/weights/colours, spans, lattice/rules/stream tables, multi-line cells,
@@ -136,8 +157,9 @@ chart false-positive guard, graphics); **true removal** (edited paragraph/cell/h
 neighbours intact, moved rule/deleted rectangle/moved+resized image verified by re-analysing the export); model, undo/redo,
 drafts, page operations and export round-trips.
 
-Exercised by hand in Chromium: bounding boxes, object tree (hover highlight, click-to-select), debug inspector on a
-page rotated 90°; hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
+Exercised by hand in Chromium: dragging a table; marquee + Shift-click selection of heading, paragraph and table and
+moving them together; ⌘C/⌘V duplicate; ⌘V into a different document in a second browser tab, then export (pasted table is
+real text); Delete + undo; bounding boxes; debug inspector on a page rotated 90°; hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
 debug view; edits on a rotated page; export → re-open in the app.
 
 **Not yet exercised:** OS file picker / drag-and-drop of real files, Firefox/Safari, and opening exports in

@@ -13,6 +13,11 @@ export interface ObjectSelection {
   objectId: string
 }
 
+export interface ObjectsSelection {
+  pageId: string
+  keys: string[]
+}
+
 export interface AppCtx {
   state: DocState
   dispatch: Dispatch<Action>
@@ -28,6 +33,10 @@ export interface AppCtx {
   scrollToPage: (index: number) => void
   scrollRequest: { index: number; nonce: number } | null
   toast: (kind: ToastKind, text: string) => void
+  /** Selected objects on one page in Edit mode ("o:<objectId>" detected objects, "v:<overlayId>" overlays). */
+  objSel: ObjectsSelection | null
+  setObjSel: (s: ObjectsSelection | null) => void
+  /** The single selected detected object, if exactly one is selected (properties panel, Enter to edit). */
   selectedObject: ObjectSelection | null
   setSelectedObject: (s: ObjectSelection | null) => void
   /** Ask a page to start editing a detected object (Enter / double-click / panel button). */
