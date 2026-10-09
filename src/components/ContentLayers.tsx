@@ -18,22 +18,27 @@ interface Layer {
  * operator of their page is skipped) and shifted to their new place: same fonts, same vectors,
  * crisp at any zoom. The originals of moved objects are hidden in the main canvas.
  */
-export function ContentLayers({ page, scale, renderScale }: { page: PageModel; scale: number; renderScale: number }) {
+export function ContentLayers({ page, scale, renderScale, skip }: { page: PageModel; scale: number; renderScale: number; skip?: string }) {
   const layers = useMemo(() => {
     const out = new Map<string, Layer>()
+    // ops of objects inside a table that have their own move (or are deleted): the table's layer skips them
+    const ownMoves = new Set(
+      page.overlays.flatMap((o) => (isMove(o) && o.source.objType !== 'TABLE' && (o.deleted || Math.abs(o.dx) >= 0.01 || Math.abs(o.dy) >= 0.01) ? o.source.ops : [])),
+    )
     for (const o of page.overlays) {
+      if (o.id === skip) continue // a move being re-typed as a text edit (the draft shows it)
       if (isMove(o)) {
         if (o.deleted || !o.source.exclusive || (Math.abs(o.dx) < 0.01 && Math.abs(o.dy) < 0.01)) continue
         const key = `m|${o.dx.toFixed(2)}|${o.dy.toFixed(2)}`
         const l = out.get(key) ?? { key, sourceId: page.sourceId, srcIndex: page.srcIndex, ops: [], dx: o.dx, dy: o.dy }
-        l.ops.push(...o.source.ops)
+        l.ops.push(...(o.source.objType === 'TABLE' ? o.source.ops.filter((op) => !ownMoves.has(op)) : o.source.ops))
         out.set(key, l)
       } else if (isPaste(o)) {
         out.set(o.id, { key: o.id, sourceId: o.sourceId, srcIndex: o.srcIndex, ops: o.items.flatMap((i) => i.ops), dx: o.dx, dy: o.dy })
       }
     }
     return [...out.values()]
-  }, [page.overlays, page.sourceId, page.srcIndex])
+  }, [page.overlays, page.sourceId, page.srcIndex, skip])
   if (!layers.length) return null
   return (
     <div className="pointer-events-none absolute inset-0" style={{ zIndex: 2 }}>

@@ -61,11 +61,18 @@ export function getPdfPage(sourceId: string, index: number): Promise<PDFPageProx
   return p
 }
 
+const releaseHooks = new Set<(id: string) => void>()
+/** Caches keyed by source register here so a closed document's data doesn't stay in memory. */
+export function onSourceReleased(fn: (id: string) => void) {
+  releaseHooks.add(fn)
+}
+
 export function releaseSource(id: string) {
   const r = registry.get(id)
   if (!r) return
   registry.delete(id)
   void r.pdf.loadingTask.destroy()
+  releaseHooks.forEach((fn) => fn(id))
 }
 
 export function releaseAllSources() {

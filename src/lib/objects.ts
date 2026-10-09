@@ -7,7 +7,7 @@
 
 import { graphicOverlayFromObject, moveOverlayFor, sampleBox, sourceRef, textOverlayFromObject } from './content/edits'
 import type { Box, ContentObject, PageContent } from './content/types'
-import { isGraphic, isLine, isMove, isPaste, isShape, isText, lineBounds, pasteBounds, shapeBounds, uid, type LineOverlay, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type ShapeKind, type ShapeOverlay, type SourceRef, type TextOverlay } from './model'
+import { isGraphic, isLine, isMove, isPaste, isShape, isText, lineBounds, pasteBounds, shapeBounds, uid, type GraphicOverlay, type LineOverlay, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type ShapeKind, type ShapeOverlay, type SourceRef, type TextOverlay } from './model'
 
 /** Style for the next drawn line: the last one the user picked. */
 export const lineStyle: Pick<LineOverlay, 'color' | 'thickness' | 'dash' | 'arrow'> = { color: '#141414', thickness: 1, dash: 'solid', arrow: 'none' }
@@ -166,6 +166,17 @@ export interface OverlayEdits {
 const coverColorFor = (canvas: HTMLCanvasElement | null | undefined, content: PageContent, b: Box) =>
   sampleBox(canvas, content.width, { x: b.x - 2, y: b.y - 2, w: b.w + 4, h: b.h + 4 }).bg
 
+/**
+ * Re-typeset / redrawn stand-ins (text or graphic overlays) already replacing detected objects.
+ * Acting on such an object again must act on its stand-in, never create a second one from the
+ * original (a table's cells are reached through the table, so they are not in the selection keys).
+ */
+function replacements(page: PageModel) {
+  const m = new Map<string, TextOverlay | GraphicOverlay>()
+  for (const o of page.overlays) if ((isText(o) || isGraphic(o)) && o.source) m.set(o.source.objectId, o)
+  return m
+}
+
 function split(keys: string[]) {
   return { objIds: keys.filter((k) => k.startsWith('o:')).map((k) => k.slice(2)), ovIds: keys.filter((k) => k.startsWith('v:')).map((k) => k.slice(2)) }
 }
@@ -175,12 +186,20 @@ export function planMove(page: PageModel, content: PageContent | undefined, keys
   const res: OverlayEdits = { add: [], update: [], remove: [], keys: [...keys] }
   const { objIds, ovIds } = split(keys)
   const moves = new Map(page.overlays.filter(isMove).map((m) => [m.source.objectId, m]))
+  const standIns = replacements(page)
+  const moved = new Set(ovIds)
   if (content) {
     for (const id of expandObjects(content, objIds)) {
       const o = content.objects[id]
       const mv = moves.get(id)
       if (mv) {
         res.update.push({ id: mv.id, patch: { dx: mv.dx + dx, dy: mv.dy + dy } })
+        continue
+      }
+      const rep = standIns.get(id)
+      if (rep) {
+        if (!moved.has(rep.id)) res.update.push({ id: rep.id, patch: { x: rep.x + dx, y: rep.y + dy } })
+        moved.add(rep.id)
         continue
       }
       if (!o.ops.length && o.type !== 'TABLE') continue // draws nothing (e.g. an empty cell)
@@ -207,7 +226,7 @@ export function planMove(page: PageModel, content: PageContent | undefined, keys
   }
   for (const id of ovIds) {
     const o = page.overlays.find((x) => x.id === id)
-    if (!o) continue
+    if (!o || res.update.some((u) => u.id === id)) continue
     if (isPaste(o) || isMove(o)) res.update.push({ id, patch: { dx: o.dx + dx, dy: o.dy + dy } })
     else if (isLine(o)) res.update.push({ id, patch: { x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy } })
     else if (isText(o) || isGraphic(o) || isShape(o)) res.update.push({ id, patch: { x: o.x + dx, y: o.y + dy } })
@@ -220,12 +239,18 @@ export function planDelete(page: PageModel, content: PageContent | undefined, ke
   const res: OverlayEdits = { add: [], update: [], remove: [], keys: [] }
   const { objIds, ovIds } = split(keys)
   const moves = new Map(page.overlays.filter(isMove).map((m) => [m.source.objectId, m]))
+  const standIns = replacements(page)
   if (content) {
     for (const id of expandObjects(content, objIds)) {
       const o = content.objects[id]
       const mv = moves.get(id)
       if (mv) {
         res.update.push({ id: mv.id, patch: { deleted: true } })
+        continue
+      }
+      const rep = standIns.get(id)
+      if (rep) {
+        if (!ovIds.includes(rep.id)) ovIds.push(rep.id) // deleted below like a selected overlay
         continue
       }
       if (!o.ops.length && o.type !== 'TABLE') continue
@@ -279,6 +304,8 @@ export interface CopiedSelection {
   lines: LineOverlay[]
   /** Drawn shapes, relative to the selection's top-left. */
   shapes?: ShapeOverlay[]
+  /** Selected objects that could not be copied (images whose operator also draws other content). */
+  skipped?: number
 }
 
 /** Captures the selection with positions normalized to its top-left corner. Synchronous (no PDF work). */
@@ -298,11 +325,13 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
     return g
   }
   const texts: TextOverlay[] = []
+  let skipped = 0
   const drawn: LineOverlay[] = []
   const shapes: ShapeOverlay[] = []
   const lines: string[] = []
   const { objIds, ovIds } = split(keys)
   const moves = new Map(page.overlays.filter(isMove).map((m) => [m.source.objectId, m]))
+  const standIns = replacements(page)
   if (content) {
     const seen = new Set<string>()
     for (const id of expandObjects(content, objIds)) {
@@ -310,13 +339,29 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
       seen.add(id)
       const o = content.objects[id]
       const mv = moves.get(id)
+      const rep = standIns.get(id)
+      if (rep) {
+        // copy what is shown (the stand-in), not the original underneath
+        if (isText(rep) && rep.text.trim()) texts.push({ ...rep, id: uid('tx'), x: rep.x - origin.x, y: rep.y - origin.y, cover: undefined, source: undefined })
+        continue
+      }
       if (!o.ops.length && o.type !== 'TABLE') continue
       const ref = sourceRef(o)
+      const ox = (mv?.dx ?? 0) - origin.x
+      const oy = (mv?.dy ?? 0) - origin.y
       if (ref.exclusive) group(page.sourceId, page.srcIndex, mv?.dx ?? 0, mv?.dy ?? 0).items.push(ref)
       else if (o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL') {
         const t = textOverlayFromObject(o, content, null)
-        texts.push({ ...t, id: uid('tx'), x: t.x + (mv?.dx ?? 0) - origin.x, y: t.y + (mv?.dy ?? 0) - origin.y, cover: undefined, source: undefined })
-      }
+        texts.push({ ...t, id: uid('tx'), x: t.x + ox, y: t.y + oy, cover: undefined, source: undefined })
+      } else if (o.type === 'LINE') {
+        // its operator also draws other things: copy it as an equivalent drawn line
+        const b = o.bounds
+        const [x1, y1, x2, y2] = o.x1 !== undefined ? [o.x1, o.y1!, o.x2!, o.y2!] : b.w >= b.h ? [b.x, b.y + b.h / 2, b.x + b.w, b.y + b.h / 2] : [b.x + b.w / 2, b.y, b.x + b.w / 2, b.y + b.h]
+        drawn.push({ id: uid('ln'), type: 'line', x1: x1 + ox, y1: y1 + oy, x2: x2 + ox, y2: y2 + oy, color: o.strokeColor ?? '#000000', thickness: o.thickness ?? 1, dash: 'solid' })
+      } else if (o.type === 'RECTANGLE') {
+        const b = o.bounds
+        shapes.push({ id: uid('sh'), type: 'shape', shape: 'rect', x: b.x + ox, y: b.y + oy, w: b.w, h: b.h, stroke: o.strokeColor ?? null, fill: o.fillColor ?? null, thickness: o.thickness ?? 1, dash: 'solid', opacity: 1 })
+      } else if (o.type === 'IMAGE') skipped += 1 // can't be cut out of its operator: not copied (reported)
     }
     // reading order for the plain text
     for (const it of sel) if (it.obj?.text) lines.push(it.obj.text)
@@ -341,6 +386,6 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
       shapes.push({ ...o, id: uid('sh'), x: o.x - origin.x, y: o.y - origin.y })
     }
   }
-  if (!groups.size && !texts.length && !drawn.length && !shapes.length) return null
-  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts, lines: drawn, shapes }
+  if (!groups.size && !texts.length && !drawn.length && !shapes.length) return skipped ? { text: '', size: { w: box.w, h: box.h }, origin, groups: [], texts, lines: drawn, shapes, skipped } : null
+  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts, lines: drawn, shapes, skipped }
 }

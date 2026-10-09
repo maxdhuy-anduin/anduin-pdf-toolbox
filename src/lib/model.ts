@@ -94,6 +94,8 @@ export interface SourceRef {
   line?: { x1: number; y1: number; x2: number; y2: number; thickness: number }
   /** True when those operators paint nothing else, so the original can be hidden exactly. */
   exclusive: boolean
+  /** Boxes (view space) of other objects' text inside `bounds`, which export must not touch. */
+  foreign?: { x: number; y: number; w: number; h: number }[]
 }
 
 /** A detected line, rectangle or image that was moved, resized or deleted. */
@@ -362,7 +364,7 @@ export interface DocState {
    * (types, or edits a run of existing text). Keeps "click, then click away"
    * from polluting the document and the undo history.
    */
-  draft: { pageId: string; overlay: TextOverlay; original: string | null } | null
+  draft: { pageId: string; overlay: TextOverlay; original: string | null; replaces?: string } | null
   past: PageModel[][]
   future: PageModel[][]
   lastKey: string | null
@@ -401,13 +403,15 @@ export type Action =
   | { type: 'editOverlays'; pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[]; coalesce?: string }
   /** Overlay changes on several pages as a single undo step (replace all). */
   | { type: 'editMany'; edits: { pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[] }[] }
-  | { type: 'startDraft'; pageId: string; overlay: TextOverlay; original: string | null }
+  /** `replaces`: an overlay (the object's move) superseded by the draft once it is committed. */
+  | { type: 'startDraft'; pageId: string; overlay: TextOverlay; original: string | null; replaces?: string }
   | { type: 'discardDraft' }
   | { type: 'setSelection'; ids: string[] }
   | { type: 'selectOverlay'; sel: { pageId: string; overlayId: string } | null }
   | { type: 'undo' }
   | { type: 'redo' }
-  | { type: 'markSaved' }
+  /** `pages`: the snapshot that was exported (edits made meanwhile stay unsaved). */
+  | { type: 'markSaved'; pages?: PageModel[] }
 
 export type OverlayPatch = Partial<Omit<TextOverlay, 'type' | 'id'>> &
   Partial<Omit<GraphicOverlay, 'type' | 'id'>> &
@@ -496,7 +500,7 @@ export function reducer(state: DocState, action: Action): DocState {
           ? !(keys.every((k) => k === 'text') && merged.text === d.original)
           : merged.text !== ''
         if (!changed) return { ...state, draft: { ...d, overlay: merged } }
-        const pages = state.pages.map((p) => (p.id === d.pageId ? { ...p, overlays: [...p.overlays, merged] } : p))
+        const pages = state.pages.map((p) => (p.id === d.pageId ? { ...p, overlays: [...p.overlays.filter((o) => o.id !== d.replaces), merged] } : p))
         return commit(state, pages, { selectedOverlay: { pageId: d.pageId, overlayId: merged.id } }, `ov:${merged.id}`)
       }
       const pages = state.pages.map((p) =>
@@ -545,7 +549,7 @@ export function reducer(state: DocState, action: Action): DocState {
       return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) })
     }
     case 'startDraft':
-      return { ...state, draft: { pageId: action.pageId, overlay: action.overlay, original: action.original }, selectedOverlay: { pageId: action.pageId, overlayId: action.overlay.id } }
+      return { ...state, draft: { pageId: action.pageId, overlay: action.overlay, original: action.original, replaces: action.replaces }, selectedOverlay: { pageId: action.pageId, overlayId: action.overlay.id } }
     case 'discardDraft':
       return state.draft ? { ...state, draft: null, selectedOverlay: null } : state
     case 'setSelection':
@@ -581,7 +585,7 @@ export function reducer(state: DocState, action: Action): DocState {
       }
     }
     case 'markSaved':
-      return { ...state, savedPages: state.pages }
+      return { ...state, savedPages: action.pages ?? state.pages }
   }
 }
 

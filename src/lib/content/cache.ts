@@ -2,13 +2,18 @@
 import { analyzePage } from './analyze'
 import { extractPage } from './extract'
 import type { PageContent } from './types'
-import { getPdfPage, pdfjs } from '../pdfjs'
+import { getPdfPage, hasSource, onSourceReleased, pdfjs } from '../pdfjs'
+import { imageSnapshots } from './edits'
 
 const cache = new Map<string, Promise<PageContent>>()
 const done = new Map<string, PageContent>()
 const listeners = new Set<() => void>()
 
 export const contentKey = (sourceId: string, srcIndex: number) => `${sourceId}:${srcIndex}`
+
+onSourceReleased((sourceId) => {
+  for (const m of [cache, done, imageSnapshots] as Map<string, unknown>[]) for (const k of [...m.keys()]) if (k.startsWith(`${sourceId}:`)) m.delete(k)
+})
 
 export function getCachedContent(sourceId: string, srcIndex: number): PageContent | undefined {
   return done.get(contentKey(sourceId, srcIndex))
@@ -45,7 +50,7 @@ export function prefetchContent(sourceId: string, numPages: number) {
   const idle: (cb: () => void) => void =
     typeof window !== 'undefined' && 'requestIdleCallback' in window ? (cb) => window.requestIdleCallback(cb, { timeout: 1500 }) : (cb) => setTimeout(cb, 50)
   const next = () => {
-    if (i >= numPages) return
+    if (i >= numPages || !hasSource(sourceId)) return
     const idx = i++
     getPageContent(sourceId, idx)
       .catch(() => undefined)

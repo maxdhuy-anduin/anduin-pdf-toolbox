@@ -12,7 +12,7 @@
 import { PDFDocument } from 'pdf-lib'
 import type { CopiedSelection } from './objects'
 import type { PageInfo } from './model'
-import { getSourceBytes } from './pdfjs'
+import { getSourceBytes, onSourceReleased } from './pdfjs'
 
 export interface ClipPage {
   /** One-page PDF of the source page (unchanged, so operator indices still match). */
@@ -64,10 +64,8 @@ async function onePage(sourceId: string, srcIndex: number): Promise<Uint8Array> 
   return out.save()
 }
 
-/** Forget cached parsed documents (call when sources are released). */
-export function forgetClipboardSources() {
-  loaded.clear()
-}
+// parsed copies of a closed document are not kept (a copy already made keeps its own one-page PDF)
+onSourceReleased((id) => loaded.delete(id))
 
 /** Starts a copy. The PDF work runs in the background; paste waits for it if needed. */
 export function setClipboard(sel: CopiedSelection, pageId: string, infos: (sourceId: string, srcIndex: number) => PageInfo, names: (sourceId: string) => string): string {

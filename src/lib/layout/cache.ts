@@ -3,6 +3,7 @@
 
 import { AdobeLayoutExtractor, LocalLayoutExtractor, PROVIDERS, type LayoutExtractionProvider } from './provider'
 import type { LayoutPage, ProviderId } from './types'
+import { onSourceReleased } from '../pdfjs'
 
 const pending = new Map<string, Promise<LayoutPage>>()
 const done = new Map<string, LayoutPage>()
@@ -10,6 +11,10 @@ const listeners = new Set<() => void>()
 let active: ProviderId = 'local'
 
 const key = (sourceId: string, pageIndex: number) => `${active}:${sourceId}:${pageIndex}`
+
+onSourceReleased((sourceId) => {
+  for (const m of [pending, done] as Map<string, unknown>[]) for (const k of [...m.keys()]) if (k.split(':')[1] === sourceId) m.delete(k)
+})
 
 export const getActiveProvider = (): LayoutExtractionProvider => PROVIDERS.find((p) => p.id === active) ?? LocalLayoutExtractor
 

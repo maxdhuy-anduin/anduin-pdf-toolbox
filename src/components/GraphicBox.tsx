@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react'
 import { rotateDelta } from '../lib/geom'
 import type { GraphicOverlay } from '../lib/model'
-import { imageSnapshots } from '../lib/content/edits'
 
 type Corner = 'nw' | 'ne' | 'sw' | 'se' | 'w' | 'e' | 'n' | 's'
 interface Props {
   overlay: GraphicOverlay
+  /** Picture of the original image (data URL), drawn at the new place. */
+  snapshot?: string
   scale: number
   rotation: number
   selected: boolean
@@ -15,7 +16,7 @@ interface Props {
 }
 
 /** A moved / resized line, rectangle or image (the original is hidden underneath). */
-export function GraphicBox({ overlay: o, scale, rotation, selected, interactive, onSelect, onChange }: Props) {
+export function GraphicBox({ overlay: o, snapshot, scale, rotation, selected, interactive, onSelect, onChange }: Props) {
   const drag = useRef<{ kind: 'move' | Corner; sx: number; sy: number; box: { x: number; y: number; w: number; h: number } } | null>(null)
   const [live, setLive] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   if (o.deleted) return null
@@ -69,8 +70,7 @@ export function GraphicBox({ overlay: o, scale, rotation, selected, interactive,
   else if (o.kind === 'rect')
     body = <div style={{ position: 'absolute', inset: 0, background: o.fillColor ?? 'transparent', boxShadow: o.strokeColor ? `inset 0 0 0 ${Math.max(1, o.thickness * scale)}px ${o.strokeColor}` : undefined }} />
   else {
-    const src = imageSnapshots.get(o.source.objectId)
-    body = src ? <img src={src} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} /> : <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(45deg,#e5e5e5 0 6px,#f5f5f5 6px 12px)' }} />
+    body = snapshot ? <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} /> : <div style={{ position: 'absolute', inset: 0, background: 'repeating-linear-gradient(45deg,#e5e5e5 0 6px,#f5f5f5 6px 12px)' }} />
   }
 
   const handles: Corner[] = isLine ? (horizontal ? ['w', 'e'] : ['n', 's']) : ['nw', 'ne', 'sw', 'se']

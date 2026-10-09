@@ -55,3 +55,27 @@ export async function pageTexts(bytes: Uint8Array): Promise<string[]> {
   await task.destroy()
   return out
 }
+
+/** One Letter page whose content stream is exactly `content` (font /F1 = Helvetica); `extra` can add resources. */
+export async function rawPage(content: string, extra?: (doc: PDFDocument, page: ReturnType<PDFDocument['addPage']>) => void | Promise<void>) {
+  const { PDFName, StandardFonts } = await import('pdf-lib')
+  const doc = await PDFDocument.create()
+  const page = doc.addPage([612, 792])
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  page.node.setFontDictionary(PDFName.of('F1'), font.ref)
+  if (extra) await extra(doc, page)
+  page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.flateStream(content)))
+  return doc.save()
+}
+
+/** The app's analysis of page `n` (PDF.js extraction + analyzer), as the editor sees it. */
+export async function analyzed(bytes: Uint8Array, n = 0) {
+  const { extractPage } = await import('../lib/content/extract')
+  const { analyzePage } = await import('../lib/content/analyze')
+  const task = pdfjs.getDocument({ data: bytes.slice(), verbosity: 0, fontExtraProperties: true })
+  const doc = await task.promise
+  const page = await doc.getPage(n + 1)
+  const content = analyzePage(await extractPage(page, pdfjs as never))
+  await task.destroy()
+  return content
+}
