@@ -87,6 +87,14 @@ function termsTable(c: Ctx, page: PDFPage, rows: [string, string][], y: number) 
 }
 
 export const SAMPLE_FUND_NAME = 'Sample - Meridian Growth Fund III (synthetic).pdf'
+
+/** The sample opened from the start screen: a blank CRS self-certification form (public/samples). */
+export const SAMPLE_PDF_NAME = 'Sample PDF (CRS FCL).pdf'
+export async function fetchSamplePdf(): Promise<Uint8Array> {
+  const r = await fetch(`${import.meta.env.BASE_URL}samples/sample-crs-fcl.pdf`)
+  if (!r.ok) throw new Error(`The sample document could not be loaded (${r.status}).`)
+  return new Uint8Array(await r.arrayBuffer())
+}
 export const SAMPLE_SUPPLEMENT_NAME = 'Sample - Side Letter and Fee Schedule (synthetic).pdf'
 
 /** 7-page synthetic fund offering summary. Page 4 is an "internal notes" page to delete in the demo. */

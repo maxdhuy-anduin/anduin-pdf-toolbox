@@ -30,7 +30,7 @@ import { getActiveProvider, setActiveProvider } from './lib/layout/cache'
 import type { ProviderId } from './lib/layout/types'
 import { createLayoutSuite, LAYOUT_SUITE_NAME } from './lib/testDocs'
 import { getSourceBytes, hasSource, LARGE_FILE_BYTES, openPdfBytes, openPdfFile, PdfError, releaseSource } from './lib/pdfjs'
-import { createSampleFund, SAMPLE_FUND_NAME } from './lib/samples'
+import { createSampleFund, fetchSamplePdf, SAMPLE_FUND_NAME, SAMPLE_PDF_NAME } from './lib/samples'
 
 const TOOL_HINTS: Record<Tool, [string, string]> = {
   select: ['Select', ''],
@@ -311,7 +311,9 @@ export default function App() {
     [openFile],
   )
 
-  const openSample = useCallback(() => void loadDocument(SAMPLE_FUND_NAME, async () => openPdfBytes(SAMPLE_FUND_NAME, await createSampleFund())), [loadDocument])
+  const openSample = useCallback(() => void loadDocument(SAMPLE_PDF_NAME, async () => openPdfBytes(SAMPLE_PDF_NAME, await fetchSamplePdf())), [loadDocument])
+  /** The synthetic fund document the README walkthrough and the tests use. */
+  const openDemo = useCallback(() => void loadDocument(SAMPLE_FUND_NAME, async () => openPdfBytes(SAMPLE_FUND_NAME, await createSampleFund())), [loadDocument])
 
   const openTestSuite = useCallback(() => void loadDocument(LAYOUT_SUITE_NAME, async () => openPdfBytes(LAYOUT_SUITE_NAME, await createLayoutSuite())), [loadDocument])
 
@@ -791,7 +793,7 @@ export default function App() {
           <OrganizePages onClose={closeOrganize} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} />
         ) : hasDoc ? (
           <>
-            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} onOrganize={openOrganize} onFind={() => openFind(false)} />
+            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} onOpenDemo={openDemo} onOrganize={openOrganize} onFind={() => openFind(false)} />
             {showScannedBanner && (
               <div role="status" className="flex items-center gap-2.5 border-b border-line bg-coral-soft px-4 py-2 text-[13px] text-ink">
                 <AlertTriangle size={15} className="shrink-0 text-coral" />

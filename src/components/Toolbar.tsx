@@ -16,6 +16,7 @@ interface Props {
   onExtract: () => void
   onDelete: () => void
   onOpenTestSuite: () => void
+  onOpenDemo: () => void
   onOrganize: () => void
   onFind: () => void
 }
@@ -40,7 +41,7 @@ export function ShapeIcon({ kind, size = 16 }: { kind: ShapeKind; size?: number 
   )
 }
 
-export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite, onOrganize, onFind }: Props) {
+export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite, onOpenDemo, onOrganize, onFind }: Props) {
   const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, layoutProvider, setLayoutProvider, showRulers, setShowRulers } = useApp()
   const n = state.pages.length
   const scanned = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId]?.likelyScanned : false
@@ -51,16 +52,17 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
     setZoom({ mode: 'custom', value: clamp(next ?? scale, MIN_ZOOM, MAX_ZOOM) })
   }
 
-  const toolBtn = (t: Tool, icon: React.ReactNode, label: string, key: string, disabled = false, title?: string) => (
-    <ToolBtn icon={icon} label={label} title={title ?? `${label} (${key})`} active={tool === t} disabled={disabled} onClick={() => setTool(t)} />
+  const toolBtn = (t: Tool, icon: React.ReactNode, label: string, text: string, key: string, disabled = false, title?: string) => (
+    <ToolBtn icon={icon} label={label} text={text} title={title ?? `${label} (${key})`} active={tool === t} disabled={disabled} onClick={() => setTool(t)} />
   )
 
+  // Tools keep a short label (wide screens); page and view actions are icons with tooltips.
   return (
     <div className="flex h-11 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-white px-3" role="toolbar" aria-label="Tools">
-      {toolBtn('select', <MousePointer2 size={16} />, 'Select', 'V')}
-      {toolBtn('edit', <PencilLine size={16} />, 'Edit', 'E', !!scanned, scanned ? 'Editing is unavailable: this page appears to be scanned/image-based' : 'Edit PDF content: paragraphs, tables, lines and images (E)')}
-      {toolBtn('add-text', <Type size={16} />, 'Add Text', 'T')}
-      {toolBtn('add-line', <Slash size={16} />, 'Add Line', 'L', false, 'Draw a line or arrow: drag on the page, hold Shift for straight / 45° (L)')}
+      {toolBtn('select', <MousePointer2 size={16} />, 'Select', 'Select', 'V')}
+      {toolBtn('edit', <PencilLine size={16} />, 'Edit', 'Edit', 'E', !!scanned, scanned ? 'Editing is unavailable: this page appears to be scanned/image-based' : 'Edit PDF content: paragraphs, tables, lines and images (E)')}
+      {toolBtn('add-text', <Type size={16} />, 'Add Text', 'Text', 'T', false, 'Add a text box: click on the page (T)')}
+      {toolBtn('add-line', <Slash size={16} />, 'Add Line', 'Line', 'L', false, 'Draw a line or arrow: drag on the page, hold Shift for straight / 45° (L)')}
       <Menu
         align="left"
         trigger={(toggle) => (
@@ -79,19 +81,19 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
           })),
         ]}
       />
-      {toolBtn('add-footnote', <Superscript size={16} />, 'Footnote', 'N', false, 'Add a footnote: click right after a word; the note goes to the bottom of the page (N)')}
+      {toolBtn('add-footnote', <Superscript size={16} />, 'Footnote', 'Footnote', 'N', false, 'Add a footnote: click right after a word; the note goes to the bottom of the page (N)')}
       <Divider />
       <ToolBtn icon={<LayoutGrid size={16} />} label="Organize" onClick={onOrganize} title="Organize pages: reorder by drag and drop, extract ranges, rotate, delete" />
-      <ToolBtn icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />
-      <ToolBtn icon={<Copy size={16} />} label="Duplicate" disabled={!has} onClick={() => dispatch({ type: 'duplicatePages', ids: targetIds })} title="Duplicate selected pages" />
-      <ToolBtn icon={<Trash2 size={16} />} label="Delete" disabled={!has || targetIds.length >= n} onClick={onDelete} title="Delete selected pages (Delete)" />
-      <ToolBtn icon={<RotateCcw size={16} />} label="Rotate Left" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: -90 })} title="Rotate selected pages counter-clockwise" />
-      <ToolBtn icon={<RotateCw size={16} />} label="Rotate Right" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: 90 })} title="Rotate selected pages clockwise" />
-      <ToolBtn icon={<FileOutput size={16} />} label="Extract" onClick={onExtract} title="Extract pages (selected pages or a range) into a new PDF" />
+      <ToolBtn iconOnly icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />
+      <ToolBtn iconOnly icon={<FileOutput size={16} />} label="Extract" onClick={onExtract} title="Extract pages (selected pages or a range) into a new PDF" />
+      <ToolBtn iconOnly icon={<Copy size={16} />} label="Duplicate" disabled={!has} onClick={() => dispatch({ type: 'duplicatePages', ids: targetIds })} title="Duplicate selected pages" />
+      <ToolBtn iconOnly icon={<RotateCcw size={16} />} label="Rotate Left" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: -90 })} title="Rotate selected pages counter-clockwise" />
+      <ToolBtn iconOnly icon={<RotateCw size={16} />} label="Rotate Right" disabled={!has} onClick={() => dispatch({ type: 'rotatePages', ids: targetIds, delta: 90 })} title="Rotate selected pages clockwise" />
+      <ToolBtn iconOnly icon={<Trash2 size={16} />} label="Delete" disabled={!has || targetIds.length >= n} onClick={onDelete} title="Delete selected pages (Delete)" />
 
-      <div className="ml-auto flex items-center gap-0.5 pl-3">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-3">
         <ToolBtn iconOnly icon={<ChevronUp size={16} />} label="Previous page" disabled={currentIndex <= 0} onClick={() => scrollToPage(currentIndex - 1)} />
-        <div className="flex items-center gap-1.5 font-mono text-[12px] text-ink-soft">
+        <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-[12px] text-ink-soft">
           <input
             aria-label="Current page"
             className="h-7 w-10 border border-line bg-white text-center font-mono text-[12px] tabular-nums text-ink focus:border-ink focus:outline-none"
@@ -107,17 +109,17 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
         <ToolBtn iconOnly icon={<ChevronDown size={16} />} label="Next page" disabled={currentIndex >= n - 1} onClick={() => scrollToPage(currentIndex + 1)} />
         <Divider />
         <ToolBtn iconOnly icon={<ZoomOut size={16} />} label="Zoom out" onClick={() => zoomBy(-1)} disabled={scale <= MIN_ZOOM + 0.005} />
-        <span className="w-12 text-center font-mono text-[12px] tabular-nums text-ink-soft" aria-label="Zoom level">
+        <span className="w-11 shrink-0 text-center font-mono text-[12px] tabular-nums text-ink-soft" aria-label="Zoom level">
           {Math.round(scale * 100)}%
         </span>
         <ToolBtn iconOnly icon={<ZoomIn size={16} />} label="Zoom in" onClick={() => zoomBy(1)} disabled={scale >= MAX_ZOOM - 0.005} />
-        <ToolBtn icon={<ScanLine size={16} />} label="Fit width" active={zoom.mode === 'fit'} onClick={() => setZoom({ mode: 'fit' })} />
+        <ToolBtn iconOnly toggle icon={<ScanLine size={16} />} label="Fit width" title="Fit page width" active={zoom.mode === 'fit'} onClick={() => setZoom({ mode: 'fit' })} />
         <Divider />
         <ToolBtn iconOnly icon={<Search size={16} />} label="Find and replace" title="Find and replace (⌘F)" onClick={onFind} />
-        <ToolBtn iconOnly icon={<Ruler size={16} />} label="Rulers" title="Show rulers and page margins (R)" active={showRulers} onClick={() => setShowRulers(!showRulers)} />
-        <ToolBtn icon={<SquareDashed size={16} />} label="Boxes" active={showBoxes} onClick={() => setShowBoxes(!showBoxes)} title="Show bounding boxes of detected objects (B)" />
+        <ToolBtn iconOnly toggle icon={<Ruler size={16} />} label="Rulers" title="Show rulers and page margins (R)" active={showRulers} onClick={() => setShowRulers(!showRulers)} />
+        <ToolBtn iconOnly toggle icon={<SquareDashed size={16} />} label="Boxes" active={showBoxes} onClick={() => setShowBoxes(!showBoxes)} title="Show bounding boxes of detected objects (B)" />
         <Menu
-          trigger={(toggle) => <ToolBtn iconOnly icon={<Ellipsis size={16} />} label="More options" onClick={toggle} active={debug} />}
+          trigger={(toggle) => <ToolBtn iconOnly toggle icon={<Ellipsis size={16} />} label="More options" onClick={toggle} active={debug} />}
           items={[
             { label: 'View', heading: true },
             { label: 'Show bounding boxes', hint: 'B', checked: showBoxes, onClick: () => setShowBoxes(!showBoxes) },
@@ -131,7 +133,8 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
               disabled: !p.available(),
               onClick: () => setLayoutProvider(p.id),
             })),
-            { label: 'Developer', heading: true },
+            { label: 'Samples', heading: true },
+            { label: 'Open demo document (synthetic fund)', onClick: onOpenDemo },
             { label: 'Open layout test suite', onClick: onOpenTestSuite },
           ]}
         />

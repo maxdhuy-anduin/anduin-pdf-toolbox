@@ -42,15 +42,21 @@ export function CtaButton({ children, dark = true, className = '', ...rest }: Bu
 
 interface ToolBtnProps {
   icon: ReactNode
+  /** Accessible name (and tooltip unless `title` is given). */
   label: string
+  /** Shorter visible text (defaults to `label`); shown on wide screens only. */
+  text?: string
   title?: string
   active?: boolean
+  /** A view toggle (rulers, boxes, fit width): lighter "on" state than the active tool. */
+  toggle?: boolean
   disabled?: boolean
   onClick: () => void
   iconOnly?: boolean
 }
 
-export function ToolBtn({ icon, label, title, active, disabled, onClick, iconOnly }: ToolBtnProps) {
+export function ToolBtn({ icon, label, text, title, active, toggle, disabled, onClick, iconOnly }: ToolBtnProps) {
+  const on = toggle ? 'bg-sky-soft text-sky-deep' : 'bg-ink text-white'
   return (
     <button
       type="button"
@@ -59,12 +65,12 @@ export function ToolBtn({ icon, label, title, active, disabled, onClick, iconOnl
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex h-8 items-center gap-1.5 px-2 text-[13px] font-medium transition-colors disabled:opacity-35 ${
-        active ? 'bg-ink text-white' : 'text-ink-soft hover:bg-ink/5 hover:text-ink disabled:hover:bg-transparent'
+      className={`inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap text-[13px] font-medium transition-colors disabled:opacity-35 ${iconOnly ? 'w-8 justify-center' : 'px-2'} ${
+        active ? on : 'text-ink-soft hover:bg-ink/5 hover:text-ink disabled:hover:bg-transparent'
       }`}
     >
       {icon}
-      {!iconOnly && <span className="hidden xl:inline">{label}</span>}
+      {!iconOnly && <span className="hidden xl:inline">{text ?? label}</span>}
     </button>
   )
 }

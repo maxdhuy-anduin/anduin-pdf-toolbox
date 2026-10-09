@@ -49,7 +49,7 @@ export function EmptyState({ onBrowse, onSample, dragging }: { onBrowse: () => v
         <div className="mt-12 grid max-w-4xl gap-px border border-line bg-line sm:grid-cols-3">
           {[
             [Type, 'Understands content', 'Paragraphs, headings, lists, tables, cells, rules and images are detected as objects you can select, edit, move and delete.'],
-            [Table2, 'Built for financial documents', 'Offering documents, side letters and reports: tables with or without borders are recognised cell by cell.'],
+            [Table2, 'Built for Digitization team documents', 'Subscription documents, side letters, AML/KYC forms and more. Tables are recognised cell by cell, with or without borders.'],
             [ShieldCheck, 'Private by design', PRIVACY_NOTE],
           ].map(([Icon, title, text]) => {
             const I = Icon as typeof Type

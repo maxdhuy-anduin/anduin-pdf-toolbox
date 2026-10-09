@@ -3,14 +3,9 @@ import { isDirty } from '../lib/model'
 import { useApp } from '../context'
 import { Button } from './ui'
 
-/** Mountain-peak "A" mark in the Anduin sky blue (drawn for this tool, not the official asset). */
+/** The Anduin mark (transparent PNG, 5:4), served from public/brand. */
 export function Logo({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-      <path d="M16 4 30 28H22.5L16 16.5 9.5 28H2Z" fill="#3fa6ee" />
-      <path d="M16 16.5 22.5 28h-13Z" fill="#1075dc" />
-    </svg>
-  )
+  return <img src={`${import.meta.env.BASE_URL}brand/anduin-mark.png`} alt="" aria-hidden width={Math.round(size * 1.25)} height={size} className="block shrink-0 select-none" draggable={false} />
 }
 
 export function Header({ onOpen, onExport, exporting }: { onOpen: () => void; onExport: () => void; exporting: boolean }) {
