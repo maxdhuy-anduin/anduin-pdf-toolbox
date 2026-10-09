@@ -5,12 +5,20 @@
 
 export type Rotation = 0 | 90 | 180 | 270
 
-export type FontFamily = 'Helvetica' | 'Times' | 'Courier'
+export type FontFamily = 'Helvetica' | 'Times' | 'Courier' | 'Calibri' | 'Cambria' | 'Georgia' | 'Garamond' | 'OpenSans' | 'Roboto' | 'Lato'
 
+/** Standard PDF fonts (built into every reader, nothing embedded) first, then embedded fonts. */
 export const FONT_LABELS: Record<FontFamily, string> = {
-  Helvetica: 'Sans-serif (Helvetica)',
-  Times: 'Serif (Times)',
-  Courier: 'Monospace (Courier)',
+  Helvetica: 'Arial / Helvetica',
+  Times: 'Times New Roman',
+  Courier: 'Courier New',
+  Calibri: 'Calibri',
+  Cambria: 'Cambria',
+  Georgia: 'Georgia',
+  Garamond: 'Garamond',
+  OpenSans: 'Open Sans',
+  Roboto: 'Roboto',
+  Lato: 'Lato',
 }
 
 /** Geometry of one source page, as PDF.js reports it (scale 1, intrinsic /Rotate applied). */
@@ -66,6 +74,9 @@ export interface TextOverlay {
   /** Baseline-to-baseline distance as a multiple of fontSize (default LINE_HEIGHT). */
   lineHeight?: number
   underline?: boolean
+  strike?: boolean
+  /** Set on a footnote's text (at the bottom of the page): its number. */
+  footnote?: number
   cover?: CoverRect
   /** The detected content object this text replaces (existing-text edits). */
   source?: SourceRef
@@ -148,18 +159,58 @@ export interface LineOverlay {
   color: string
   thickness: number
   dash: 'solid' | 'dashed' | 'dotted'
+  /** Arrowheads. */
+  arrow?: 'none' | 'start' | 'end' | 'both'
+  /** The short rule above a page's footnotes. */
+  role?: 'footnote-separator'
   source?: undefined
 }
 
-export type Overlay = TextOverlay | GraphicOverlay | MoveOverlay | PasteOverlay | LineOverlay
+export type ShapeKind = 'rect' | 'rounded' | 'ellipse' | 'triangle' | 'diamond' | 'pentagon' | 'hexagon' | 'star' | 'arrow' | 'check' | 'cross'
+
+/** A shape drawn by the user (Add Shape). Bounding box in view space. */
+export interface ShapeOverlay {
+  id: string
+  type: 'shape'
+  shape: ShapeKind
+  x: number
+  y: number
+  w: number
+  h: number
+  /** Outline colour, or null for no outline. */
+  stroke: string | null
+  /** Fill colour, or null for no fill. */
+  fill: string | null
+  thickness: number
+  dash: 'solid' | 'dashed' | 'dotted'
+  /** 0..1, applies to fill and outline. */
+  opacity: number
+  source?: undefined
+}
+
+export type Overlay = TextOverlay | GraphicOverlay | MoveOverlay | PasteOverlay | LineOverlay | ShapeOverlay
 export const isText = (o: Overlay): o is TextOverlay => o.type === 'text'
 export const isGraphic = (o: Overlay): o is GraphicOverlay => o.type === 'graphic'
 export const isMove = (o: Overlay): o is MoveOverlay => o.type === 'move'
 export const isPaste = (o: Overlay): o is PasteOverlay => o.type === 'paste'
 export const isLine = (o: Overlay): o is LineOverlay => o.type === 'line'
+export const isShape = (o: Overlay): o is ShapeOverlay => o.type === 'shape'
 
-export function lineBounds(o: Pick<LineOverlay, 'x1' | 'y1' | 'x2' | 'y2' | 'thickness'>) {
-  const pad = o.thickness / 2
+/** Shapes that are open strokes (no fill). */
+export const OPEN_SHAPES = new Set<ShapeKind>(['check', 'cross'])
+
+export function makeShapeOverlay(shape: ShapeKind, x: number, y: number, w: number, h: number, style: Partial<Pick<ShapeOverlay, 'stroke' | 'fill' | 'thickness' | 'dash' | 'opacity'>> = {}): ShapeOverlay {
+  return { id: uid('sh'), type: 'shape', shape, x, y, w, h, stroke: '#141414', fill: null, thickness: 1, dash: 'solid', opacity: 1, ...style }
+}
+
+/** Visible extent of a shape (its outline is centred on the path). */
+export function shapeBounds(o: Pick<ShapeOverlay, 'x' | 'y' | 'w' | 'h' | 'thickness' | 'stroke'>) {
+  const pad = o.stroke ? o.thickness / 2 : 0
+  return { x: o.x - pad, y: o.y - pad, w: o.w + 2 * pad, h: o.h + 2 * pad }
+}
+
+export function lineBounds(o: Pick<LineOverlay, 'x1' | 'y1' | 'x2' | 'y2' | 'thickness' | 'arrow'>) {
+  const pad = o.arrow && o.arrow !== 'none' ? arrowHeadSize(o.thickness).half : o.thickness / 2
   const x = Math.min(o.x1, o.x2) - pad
   const y = Math.min(o.y1, o.y2) - pad
   return { x, y, w: Math.abs(o.x2 - o.x1) + 2 * pad, h: Math.abs(o.y2 - o.y1) + 2 * pad }
@@ -168,6 +219,9 @@ export function lineBounds(o: Pick<LineOverlay, 'x1' | 'y1' | 'x2' | 'y2' | 'thi
 export function makeLineOverlay(x1: number, y1: number, x2: number, y2: number, style: Partial<Pick<LineOverlay, 'color' | 'thickness' | 'dash'>> = {}): LineOverlay {
   return { id: uid('ln'), type: 'line', x1, y1, x2, y2, color: '#141414', thickness: 1, dash: 'solid', ...style }
 }
+
+/** Arrowhead of a drawn line: length along the line and half-width, in points. */
+export const arrowHeadSize = (thickness: number) => ({ len: 5 + 3 * thickness, half: 2.5 + 1.5 * thickness })
 
 /** Union of item bounds of a pasted block, at its pasted position. */
 export function pasteBounds(o: PasteOverlay) {
@@ -345,6 +399,8 @@ export type Action =
   | { type: 'removeOverlay'; pageId: string; overlayId: string }
   /** Several overlay changes on one page as a single undo step (group move / delete / paste). */
   | { type: 'editOverlays'; pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[]; coalesce?: string }
+  /** Overlay changes on several pages as a single undo step (replace all). */
+  | { type: 'editMany'; edits: { pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[] }[] }
   | { type: 'startDraft'; pageId: string; overlay: TextOverlay; original: string | null }
   | { type: 'discardDraft' }
   | { type: 'setSelection'; ids: string[] }
@@ -357,7 +413,8 @@ export type OverlayPatch = Partial<Omit<TextOverlay, 'type' | 'id'>> &
   Partial<Omit<GraphicOverlay, 'type' | 'id'>> &
   Partial<Omit<MoveOverlay, 'type' | 'id'>> &
   Partial<Omit<PasteOverlay, 'type' | 'id' | 'source'>> &
-  Partial<Omit<LineOverlay, 'type' | 'id' | 'source'>>
+  Partial<Omit<LineOverlay, 'type' | 'id' | 'source'>> &
+  Partial<Omit<ShapeOverlay, 'type' | 'id' | 'source'>>
 
 const MAX_HISTORY = 100
 const COALESCE_MS = 1200
@@ -471,6 +528,21 @@ export function reducer(state: DocState, action: Action): DocState {
           : p,
       )
       return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) }, action.coalesce)
+    }
+    case 'editMany': {
+      const byPage = new Map(action.edits.map((e) => [e.pageId, e]))
+      if (!byPage.size) return state
+      const pages = state.pages.map((p) => {
+        const e = byPage.get(p.id)
+        if (!e) return p
+        const drop = new Set(e.remove ?? [])
+        const patches = new Map((e.update ?? []).map((u) => [u.id, u.patch]))
+        return {
+          ...p,
+          overlays: [...p.overlays.filter((o) => !drop.has(o.id)).map((o) => (patches.has(o.id) ? ({ ...o, ...patches.get(o.id) } as Overlay) : o)), ...(e.add ?? [])],
+        }
+      })
+      return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) })
     }
     case 'startDraft':
       return { ...state, draft: { pageId: action.pageId, overlay: action.overlay, original: action.original }, selectedOverlay: { pageId: action.pageId, overlayId: action.overlay.id } }

@@ -2,6 +2,10 @@
 
 Status: Phases 1–7 and 9 implemented (layout model, bounding boxes, hover/selection, marquee + Shift-click, rigid group
 moves incl. tables, delete, copy/paste, cross-tab paste). Phase 8 (in-app document tabs), 10 (Word → PDF) and 11 remain. Baseline before this work: git tag `v0.2-edit-mode`.
+Since then (tag `v0.7-find-shapes-fonts`): find & replace (`lib/search.ts`), smart guides (`lib/snap.ts`, drawn by
+`PageOverlays`), rulers and margins (`lib/margins.ts`, `components/Rulers.tsx`), shapes and arrowheads (`lib/shapes.ts`),
+superscripts and footnotes (`lib/richText.ts`, `lib/footnotes.ts`), strikethrough and embedded fonts (`lib/fonts.ts`). All
+geometry stays in canonical page space; the snap targets are the same `Item` boxes hit-testing uses.
 
 ---
 

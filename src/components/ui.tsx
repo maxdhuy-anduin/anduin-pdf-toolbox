@@ -114,11 +114,13 @@ export interface MenuItem {
   disabled?: boolean
   /** A non-interactive section heading. */
   heading?: boolean
+  /** Shown instead of the check box. */
+  icon?: ReactNode
   onClick?: () => void
 }
 
-export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: MenuItem[] }) {
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+export function Menu({ trigger, items, align = 'right' }: { trigger: (open: () => void) => ReactNode; items: MenuItem[]; align?: 'left' | 'right' }) {
+  const [pos, setPos] = useState<{ top: number; right?: number; left?: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const open = !!pos
@@ -143,14 +145,14 @@ export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactN
     if (open) return setPos(null)
     // rendered in a portal: the toolbar scrolls horizontally, which would clip an absolute dropdown
     const r = ref.current!.getBoundingClientRect()
-    setPos({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) })
+    setPos(align === 'left' ? { top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 268)) } : { top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) })
   }
   return (
     <div className="relative" ref={ref}>
       {trigger(toggle)}
       {pos &&
         createPortal(
-          <div ref={menuRef} role="menu" className="fixed z-[90] min-w-[260px] border border-line bg-white py-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.25)]" style={{ top: pos.top, right: pos.right }}>
+          <div ref={menuRef} role="menu" className="fixed z-[90] min-w-[260px] border border-line bg-white py-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.25)]" style={{ top: pos.top, right: pos.right, left: pos.left }}>
             {items.map((it) =>
               it.heading ? (
                 <div key={it.label} className="mt-1 border-t border-line-soft px-3 pb-1 pt-2.5 font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted first:mt-0 first:border-t-0">
@@ -169,9 +171,13 @@ export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactN
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-ink hover:bg-wash disabled:cursor-not-allowed disabled:text-faint disabled:hover:bg-transparent"
                 >
-                  <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${it.checked ? 'border-ink bg-ink' : it.checked === false ? 'border-line' : 'border-transparent'}`}>
-                    {it.checked && <span className="h-1.5 w-1.5 bg-white" />}
-                  </span>
+                  {it.icon ? (
+                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center ${it.checked ? 'text-sky-deep' : 'text-ink'}`}>{it.icon}</span>
+                  ) : (
+                    <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${it.checked ? 'border-ink bg-ink' : it.checked === false ? 'border-line' : 'border-transparent'}`}>
+                      {it.checked && <span className="h-1.5 w-1.5 bg-white" />}
+                    </span>
+                  )}
                   <span className="flex-1">{it.label}</span>
                   {it.hint && <span className="font-mono text-[10.5px] text-muted">{it.hint}</span>}
                 </button>

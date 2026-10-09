@@ -68,6 +68,8 @@ export interface ContentObject {
   hardBreaks?: boolean[]
   /** Baseline of the first line (view space), used to place replacement text precisely. */
   firstBaseline?: number
+  /** Lines: which characters of `text` each PDF text item drew, and where (search highlights). */
+  textRuns?: TextRun[]
 
   // tables
   rows?: number
@@ -88,6 +90,16 @@ export interface ContentObject {
   thickness?: number
   strokeColor?: string | null
   fillColor?: string | null
+}
+
+export interface TextRun {
+  /** Character range [s, e) in the line's text. */
+  s: number
+  e: number
+  /** Horizontal extent of the item (view space). */
+  x0: number
+  x1: number
+  family: FontFamily
 }
 
 export type PageKind = 'digital' | 'scanned' | 'empty'

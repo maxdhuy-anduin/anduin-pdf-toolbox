@@ -7,6 +7,8 @@ import { getPdfPage, pdfjs } from '../lib/pdfjs'
 import { ContentLayers } from './ContentLayers'
 import { LayoutLayer } from './LayoutLayer'
 import { PageOverlays } from './PageOverlays'
+import { Rulers } from './Rulers'
+import { SearchLayer } from './SearchLayer'
 import { Rotated } from './ui'
 
 const PAD = 28
@@ -53,7 +55,8 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
   const holderRef = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [renderedHidden, setRenderedHidden] = useState<Set<number>>(() => new Set())
-  const { tool, showBoxes, debug } = useApp()
+  const { tool, showBoxes, debug, search } = useApp()
+  const hits = useMemo(() => search?.hits.filter((h) => h.pageId === page.id && h.rects.length) ?? [], [search, page.id])
   const edited = useMemo(() => new Set(page.overlays.flatMap((o) => (o.source ? [o.source.objectId] : []))), [page.overlays])
   // Operators whose content has been replaced by an edit: skipped when rendering (exact hiding).
   const hiddenKey = useMemo(
@@ -133,13 +136,14 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
         <ContentLayers page={page} scale={scale} renderScale={renderScale} />
         <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
         {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
+        {hits.length > 0 && <SearchLayer hits={hits} activeId={search?.activeId ?? null} scale={scale} />}
       </div>
     </Rotated>
   )
 })
 
 export function Viewer() {
-  const { state, scale: _s, setScale, zoom, setZoom, currentIndex, setCurrentIndex, scrollRequest, tool, dispatch } = useApp()
+  const { state, scale: _s, setScale, zoom, setZoom, currentIndex, setCurrentIndex, scrollRequest, tool, dispatch, showRulers } = useApp()
   void _s
   const { pages, sources } = state
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -239,7 +243,7 @@ export function Viewer() {
   }, [scale, setZoom])
 
   const cursor = tool === 'add-text' ? 'text' : undefined
-  return (
+  const viewer = (
     <div
       ref={scrollRef}
       onScroll={onScroll}
@@ -272,5 +276,11 @@ export function Viewer() {
         })}
       </div>
     </div>
+  )
+  // always wrapped (rulers hidden or not) so the scroll container is never remounted
+  return (
+    <Rulers enabled={showRulers} scrollRef={scrollRef} tops={layout.tops} contentW={contentW} sizes={sizes} scale={scale}>
+      {viewer}
+    </Rulers>
   )
 }

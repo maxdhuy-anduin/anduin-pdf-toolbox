@@ -1,14 +1,17 @@
-import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, Copy, Italic, Minus, PencilLine, Plus, RotateCcw, Trash2, Underline } from 'lucide-react'
+import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, Copy, Italic, Minus, PencilLine, Plus, RotateCcw, Strikethrough, Superscript, Trash2, Underline } from 'lucide-react'
 import { useApp } from '../context'
 import { CHUNK_COLORS, CHUNK_LEGEND } from './LayoutLayer'
-import { unsupportedChars } from '../lib/fonts'
-import { FONT_LABELS, isGraphic, isLine, isText, type DocState, type LineOverlay, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
+import { EMBEDDED_FONTS, unsupportedChars } from '../lib/fonts'
+import { FONT_LABELS, isGraphic, isLine, isShape, isText, OPEN_SHAPES, type DocState, type LineOverlay, type FontFamily, type GraphicOverlay, type OverlayPatch, type ShapeKind, type ShapeOverlay, type TextOverlay } from '../lib/model'
+import { SHAPE_LABELS } from '../lib/shapes'
+import { toggleSuper } from '../lib/richText'
+import { ShapeIcon } from './Toolbar'
 import { getCachedContent } from '../lib/content/cache'
 import { describeObject, isGraphicObject, isTextObject, OBJECT_LABEL } from '../lib/content/edits'
 import type { ContentObject, PageContent } from '../lib/content/types'
 import { Button, Eyebrow } from './ui'
 import { usePageContent } from './PageOverlays'
-import { lineStyle } from '../lib/objects'
+import { lineStyle, shapeStyle } from '../lib/objects'
 
 const SWATCHES = ['#141414', '#162950', '#1075dc', '#c2412a', '#15803d', '#858585']
 
@@ -32,6 +35,98 @@ const singleLine = (state: DocState, sel: { pageId: string; keys: string[] }) =>
   const o = state.pages.find((p) => p.id === sel.pageId)?.overlays.find((x) => `v:${x.id}` === sel.keys[0])
   return o && isLine(o) ? o : null
 }
+const singleShape = (state: DocState, sel: { pageId: string; keys: string[] }) => {
+  const o = state.pages.find((p) => p.id === sel.pageId)?.overlays.find((x) => `v:${x.id}` === sel.keys[0])
+  return o && isShape(o) ? o : null
+}
+
+const DASHES = ['solid', 'dashed', 'dotted'] as const
+function DashPicker({ value, onChange }: { value: 'solid' | 'dashed' | 'dotted'; onChange: (d: 'solid' | 'dashed' | 'dotted') => void }) {
+  return (
+    <div className="flex gap-1">
+      {DASHES.map((d) => (
+        <button key={d} type="button" onClick={() => onChange(d)} aria-label={d} aria-pressed={value === d} className={`flex h-8 flex-1 items-center justify-center border ${value === d ? 'border-ink bg-ink' : 'border-line hover:border-ink'}`}>
+          <svg width="44" height="6">
+            <line x1="2" y1="3" x2="42" y2="3" stroke={value === d ? '#fff' : '#141414'} strokeWidth="2" strokeDasharray={d === 'dashed' ? '8 6' : d === 'dotted' ? '0 5' : undefined} strokeLinecap={d === 'dotted' ? 'round' : 'butt'} />
+          </svg>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function ThicknessPicker({ value, onChange, values = [0.5, 1, 1.5, 2, 3, 4] }: { value: number; onChange: (t: number) => void; values?: number[] }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {values.map((t) => (
+        <button key={t} type="button" aria-pressed={value === t} onClick={() => onChange(t)} className={`flex h-8 w-11 items-center justify-center border text-[11.5px] tabular-nums ${value === t ? 'border-ink bg-ink text-white' : 'border-line hover:border-ink'}`}>
+          {t}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** A shape drawn with Add Shape. Style changes also become the default for the next shape. */
+function ShapeProps({ shape: o, pageId }: { shape: ShapeOverlay; pageId: string }) {
+  const { dispatch } = useApp()
+  const set = (patch: OverlayPatch, prop: string) => {
+    const { shape, ...rest } = patch as Partial<ShapeOverlay>
+    Object.assign(shapeStyle, rest, shape ? { shape } : {})
+    dispatch({ type: 'updateOverlay', pageId, overlayId: o.id, patch, coalesce: `fmt:${o.id}:${prop}` })
+  }
+  const open = OPEN_SHAPES.has(o.shape)
+  const num = (label: string, v: number, on: (n: number) => void) => (
+    <label className="flex items-center gap-1.5 text-[12px] text-muted">
+      {label}
+      <input type="number" step={1} min={2} value={Math.round(v * 10) / 10} onChange={(e) => { const n = parseFloat(e.target.value); if (n >= 2) on(n) }} className="h-8 w-full min-w-0 border border-line px-1.5 text-[12.5px] tabular-nums text-ink focus:border-ink focus:outline-none" />
+    </label>
+  )
+  return (
+    <div className="space-y-4 p-4 text-[13px]" data-keep-selection>
+      <div>
+        <Label>Shape</Label>
+        <div className="grid grid-cols-6 gap-1">
+          {(Object.keys(SHAPE_LABELS) as ShapeKind[]).map((k) => (
+            <button key={k} type="button" title={SHAPE_LABELS[k]} aria-label={SHAPE_LABELS[k]} aria-pressed={o.shape === k} onClick={() => set({ shape: k }, 'shape')} className={`flex h-8 items-center justify-center border ${o.shape === k ? 'border-ink bg-ink text-white' : 'border-line text-ink hover:border-ink'}`}>
+              <ShapeIcon kind={k} size={18} />
+            </button>
+          ))}
+        </div>
+      </div>
+      <ColorField label="Outline" value={o.stroke ?? '#141414'} none={!o.stroke} onNone={open ? undefined : () => set({ stroke: null }, 'stroke')} onChange={(c) => set({ stroke: c }, 'stroke')} />
+      {!open && <ColorField label="Fill" value={o.fill ?? '#ffffff'} none={!o.fill} onNone={() => set({ fill: null }, 'fill')} onChange={(c) => set({ fill: c }, 'fill')} />}
+      {o.stroke && (
+        <>
+          <div>
+            <Label>Outline thickness</Label>
+            <ThicknessPicker value={o.thickness} onChange={(t) => set({ thickness: t }, 'thick')} />
+          </div>
+          <div>
+            <Label>Outline style</Label>
+            <DashPicker value={o.dash} onChange={(d) => set({ dash: d }, 'dash')} />
+          </div>
+        </>
+      )}
+      <label className="block">
+        <Label>Opacity · {Math.round(o.opacity * 100)}%</Label>
+        <input type="range" min={10} max={100} step={5} value={Math.round(o.opacity * 100)} onChange={(e) => set({ opacity: Number(e.target.value) / 100 }, 'opacity')} className="w-full accent-[#141414]" aria-label="Opacity" />
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        {num('W', o.w, (n) => set({ w: n }, 'w'))}
+        {num('H', o.h, (n) => set({ h: n }, 'h'))}
+      </div>
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <Button variant="danger" onClick={() => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op: 'delete' } }))}>
+          <Trash2 size={14} />
+          Delete shape
+          <span className="ml-auto font-mono text-[10.5px] opacity-70">DEL</span>
+        </Button>
+      </div>
+      <p className="text-[12px] leading-relaxed text-muted">Drag to move (pink guides help you line it up and space it evenly; hold ⌥ to move freely). Drag the handles to resize, Shift keeps the proportions.</p>
+    </div>
+  )
+}
 
 /** A line drawn with Add Line. Style changes also become the default for the next line. */
 function LineProps({ line: o, pageId }: { line: LineOverlay; pageId: string }) {
@@ -47,21 +142,21 @@ function LineProps({ line: o, pageId }: { line: LineOverlay; pageId: string }) {
       <ColorField label="Colour" value={o.color} onChange={(c) => set({ color: c }, 'color')} />
       <div>
         <Label>Thickness</Label>
-        <div className="flex flex-wrap gap-1">
-          {[0.5, 1, 1.5, 2, 3, 4].map((t) => (
-            <button key={t} type="button" onClick={() => set({ thickness: t }, 'thick')} className={`flex h-8 w-11 items-center justify-center border text-[11.5px] tabular-nums ${o.thickness === t ? 'border-ink bg-ink text-white' : 'border-line hover:border-ink'}`}>
-              {t}
-            </button>
-          ))}
-        </div>
+        <ThicknessPicker value={o.thickness} onChange={(t) => set({ thickness: t }, 'thick')} />
       </div>
       <div>
         <Label>Style</Label>
+        <DashPicker value={o.dash} onChange={(d) => set({ dash: d }, 'dash')} />
+      </div>
+      <div>
+        <Label>Arrowheads</Label>
         <div className="flex gap-1">
-          {(['solid', 'dashed', 'dotted'] as const).map((d) => (
-            <button key={d} type="button" onClick={() => set({ dash: d }, 'dash')} aria-label={d} className={`flex h-8 flex-1 items-center justify-center border ${o.dash === d ? 'border-ink bg-ink' : 'border-line hover:border-ink'}`}>
-              <svg width="44" height="6">
-                <line x1="2" y1="3" x2="42" y2="3" stroke={o.dash === d ? '#fff' : '#141414'} strokeWidth="2" strokeDasharray={d === 'dashed' ? '8 6' : d === 'dotted' ? '0 5' : undefined} strokeLinecap={d === 'dotted' ? 'round' : 'butt'} />
+          {(['none', 'end', 'start', 'both'] as const).map((a) => (
+            <button key={a} type="button" aria-label={`Arrowheads: ${a}`} aria-pressed={(o.arrow ?? 'none') === a} onClick={() => set({ arrow: a }, 'arrow')} className={`flex h-8 flex-1 items-center justify-center border ${(o.arrow ?? 'none') === a ? 'border-ink bg-ink text-white' : 'border-line text-ink hover:border-ink'}`}>
+              <svg width="40" height="10" aria-hidden>
+                <line x1={a === 'start' || a === 'both' ? 8 : 3} y1="5" x2={a === 'end' || a === 'both' ? 32 : 37} y2="5" stroke="currentColor" strokeWidth="1.5" />
+                {(a === 'start' || a === 'both') && <polygon points="2,5 9,1.5 9,8.5" fill="currentColor" />}
+                {(a === 'end' || a === 'both') && <polygon points="38,5 31,1.5 31,8.5" fill="currentColor" />}
               </svg>
             </button>
           ))}
@@ -92,7 +187,7 @@ function SelectionProps({ pageId, keys }: { pageId: string; keys: string[] }) {
   for (const k of keys) {
     const label = k.startsWith('o:')
       ? (content?.objects[k.slice(2)] ? describeObject(content.objects[k.slice(2)]).split(' · ')[0] : 'Object')
-      : ({ paste: 'Pasted block', line: 'Line' } as Record<string, string>)[page?.overlays.find((o) => o.id === k.slice(2))?.type ?? ''] ?? 'Text box'
+      : ({ paste: 'Pasted block', line: 'Line', shape: 'Shape' } as Record<string, string>)[page?.overlays.find((o) => o.id === k.slice(2))?.type ?? ''] ?? 'Text box'
     counts.set(label, (counts.get(label) ?? 0) + 1)
   }
   const send = (op: string) => window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId, op } }))
@@ -145,11 +240,16 @@ export function PropertiesPanel() {
     title = OBJECT_LABEL[overlay.source.objType] ?? 'Graphic'
     body = <GraphicProps overlay={overlay} pageId={page.id} />
   } else if (overlay && page && isText(overlay)) {
-    title = overlay.source ? 'Edited text' : 'Text box'
+    title = overlay.footnote ? `Footnote ${overlay.footnote}` : overlay.source ? 'Edited text' : 'Text box'
     body = <TextProps overlay={overlay} pageId={page.id} isDraft={isDraft} />
   } else if (objSel && objSel.keys.length === 1 && singleLine(state, objSel)) {
-    title = 'Line'
-    body = <LineProps line={singleLine(state, objSel)!} pageId={objSel.pageId} />
+    const l = singleLine(state, objSel)!
+    title = l.role === 'footnote-separator' ? 'Footnote rule' : l.arrow && l.arrow !== 'none' ? 'Arrow' : 'Line'
+    body = <LineProps line={l} pageId={objSel.pageId} />
+  } else if (objSel && objSel.keys.length === 1 && singleShape(state, objSel)) {
+    const sh = singleShape(state, objSel)!
+    title = SHAPE_LABELS[sh.shape]
+    body = <ShapeProps shape={sh} pageId={objSel.pageId} />
   } else if (objSel && (objSel.keys.length > 1 || objSel.keys[0]?.startsWith('v:'))) {
     title = objSel.keys.length > 1 ? `${objSel.keys.length} objects` : 'Pasted content'
     body = <SelectionProps pageId={objSel.pageId} keys={objSel.keys} />
@@ -259,7 +359,9 @@ function ObjectProps({ o, content, pageId }: { o: ContentObject; content: PageCo
 function TextProps({ overlay: o, pageId, isDraft }: { overlay: TextOverlay; pageId: string; isDraft: boolean }) {
   const { dispatch, setTool } = useApp()
   const set = (patch: OverlayPatch, prop: string) => dispatch({ type: 'updateOverlay', pageId, overlayId: o.id, patch, coalesce: `fmt:${o.id}:${prop}` })
-  const bad = unsupportedChars(o.text)
+  const bad = unsupportedChars(o.text, o.fontFamily)
+  const embedded = EMBEDDED_FONTS[o.fontFamily]
+  const editingThis = () => !!document.activeElement?.closest(`[data-overlay-id="${o.id}"]`)
   const lh = o.lineHeight ?? 1.2
   const remove = () => {
     if (isDraft) dispatch({ type: 'discardDraft' })
@@ -278,13 +380,23 @@ function TextProps({ overlay: o, pageId, isDraft }: { overlay: TextOverlay; page
       )}
       <label className="block">
         <Label>Font</Label>
-        <select className="h-8 w-full border border-line bg-white px-2 focus:border-ink focus:outline-none" value={o.fontFamily} onChange={(e) => set({ fontFamily: e.target.value as FontFamily }, 'font')}>
-          {(Object.keys(FONT_LABELS) as FontFamily[]).map((f) => (
-            <option key={f} value={f}>
-              {FONT_LABELS[f]}
-            </option>
-          ))}
+        <select aria-label="Font" className="h-8 w-full border border-line bg-white px-2 focus:border-ink focus:outline-none" value={o.fontFamily} onChange={(e) => set({ fontFamily: e.target.value as FontFamily }, 'font')}>
+          <optgroup label="Standard PDF fonts">
+            {(Object.keys(FONT_LABELS) as FontFamily[]).filter((f) => !EMBEDDED_FONTS[f]).map((f) => (
+              <option key={f} value={f}>
+                {FONT_LABELS[f]}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Embedded in the PDF">
+            {(Object.keys(FONT_LABELS) as FontFamily[]).filter((f) => EMBEDDED_FONTS[f]).map((f) => (
+              <option key={f} value={f}>
+                {FONT_LABELS[f]}
+              </option>
+            ))}
+          </optgroup>
         </select>
+        {embedded && <span className="mt-1 block text-[11.5px] leading-snug text-muted">{embedded.note}. Embedded in the exported PDF.</span>}
       </label>
 
       <div className="grid grid-cols-2 gap-3">
@@ -342,6 +454,18 @@ function TextProps({ overlay: o, pageId, isDraft }: { overlay: TextOverlay; page
           <Seg label="Underline" active={!!o.underline} onClick={() => set({ underline: !o.underline }, 'underline')}>
             <Underline size={15} />
           </Seg>
+          <Seg label="Strikethrough" active={!!o.strike} onClick={() => set({ strike: !o.strike }, 'strike')}>
+            <Strikethrough size={15} />
+          </Seg>
+          <Seg
+            label="Superscript (⇧⌘=): the selected characters, or the whole box"
+            onClick={() => {
+              if (editingThis() && !window.getSelection()?.isCollapsed) window.dispatchEvent(new CustomEvent('toolbox:superscript', { detail: { overlayId: o.id } }))
+              else set({ text: toggleSuper(o.text) }, 'sup')
+            }}
+          >
+            <Superscript size={15} />
+          </Seg>
           <span className="mx-1 h-5 w-px bg-line" />
           {(['left', 'center', 'right', 'justify'] as const).map((a) => (
             <Seg key={a} label={`Align ${a}`} active={o.align === a} onClick={() => set({ align: a, ...(a === 'justify' ? { wrap: true } : {}) }, 'align')}>
@@ -361,6 +485,13 @@ function TextProps({ overlay: o, pageId, isDraft }: { overlay: TextOverlay; page
       )}
 
       <div className="flex flex-col gap-2 border-t border-line pt-4">
+        {!o.footnote && (
+          <Button onClick={() => window.dispatchEvent(new CustomEvent('toolbox:footnote', { detail: { pageId, overlayId: o.id } }))}>
+            <Superscript size={14} />
+            Insert footnote
+            <span className="ml-auto text-[11px] text-muted">{editingThis() ? 'at the caret' : 'at the end'}</span>
+          </Button>
+        )}
         <Button variant="danger" onClick={remove}>
           <Trash2 size={14} />
           {o.source || o.cover ? 'Delete text' : 'Delete text box'}
@@ -434,23 +565,35 @@ function GraphicProps({ overlay: o, pageId }: { overlay: GraphicOverlay; pageId:
   )
 }
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (c: string) => void }) {
+function ColorField({ label, value, onChange, none, onNone }: { label: string; value: string; onChange: (c: string) => void; none?: boolean; onNone?: () => void }) {
   return (
     <div>
       <Label>{label}</Label>
       <div className="flex flex-wrap items-center gap-1.5">
+        {onNone && (
+          <button
+            type="button"
+            aria-label={`No ${label.toLowerCase()}`}
+            title={`No ${label.toLowerCase()}`}
+            aria-pressed={none}
+            onClick={onNone}
+            className={`relative h-6 w-6 overflow-hidden border bg-white ${none ? 'outline-2 outline-offset-1 outline-sky-deep' : 'border-line'}`}
+          >
+            <span className="absolute left-1/2 top-[-4px] h-8 w-[1.5px] -translate-x-1/2 rotate-45 bg-coral" />
+          </button>
+        )}
         {SWATCHES.map((c) => (
           <button
             key={c}
             type="button"
             aria-label={`${label} ${c}`}
             onClick={() => onChange(c)}
-            className={`h-6 w-6 border ${value.toLowerCase() === c ? 'outline-2 outline-offset-1 outline-sky-deep' : 'border-line'}`}
+            className={`h-6 w-6 border ${!none && value.toLowerCase() === c ? 'outline-2 outline-offset-1 outline-sky-deep' : 'border-line'}`}
             style={{ background: c }}
           />
         ))}
         <input aria-label={`Custom ${label.toLowerCase()}`} type="color" value={value} onChange={(e) => onChange(e.target.value)} className="h-6 w-8 cursor-pointer border border-line bg-white p-0" />
-        <span className="ml-1 font-mono text-[11px] text-muted">{value}</span>
+        <span className="ml-1 font-mono text-[11px] text-muted">{none ? 'none' : value}</span>
       </div>
     </div>
   )
@@ -510,6 +653,12 @@ function Overview({ currentIndex }: { currentIndex: number }) {
           <li>Drag a selected object to move it; use the handles to resize; Delete removes it.</li>
           <li>
             <strong className="font-semibold text-ink">Add Text (T)</strong>: click anywhere to place a new text box.
+          </li>
+          <li>
+            <strong className="font-semibold text-ink">Line (L), Shapes (S)</strong>: drag to draw. <strong className="font-semibold text-ink">Footnote (N)</strong>: click after a word.
+          </li>
+          <li>
+            <strong className="font-semibold text-ink">Find (⌘F)</strong> and replace (⌥⌘F); <strong className="font-semibold text-ink">rulers (R)</strong> show the page margins.
           </li>
         </ul>
       </div>

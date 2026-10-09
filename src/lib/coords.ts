@@ -143,4 +143,16 @@ export function clientToCanvas(clientX: number, clientY: number, pageEl: HTMLEle
 }
 
 /** Where the baseline sits inside a CSS line box of height 1.2em, per font family. */
-export const BASELINE_RATIO = { Helvetica: 0.9465, Times: 0.9375, Courier: 0.8665 } as const
+export const BASELINE_RATIO = {
+  Helvetica: 0.9465,
+  Times: 0.9375,
+  Courier: 0.8665,
+  // 0.6 + (ascent - descent) / 2, from each font's hhea metrics (what browsers use for the line box)
+  Calibri: 0.9418,
+  Cambria: 0.925,
+  Georgia: 0.893,
+  Garamond: 0.9545,
+  OpenSans: 0.9879,
+  Roboto: 0.9418,
+  Lato: 0.987,
+} as const

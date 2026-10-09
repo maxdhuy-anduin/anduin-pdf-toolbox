@@ -1,11 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { rotateDelta } from '../lib/geom'
 import { LINE_HEIGHT, type FontFamily, type TextOverlay } from '../lib/model'
+import { EMBEDDED_FONTS } from '../lib/fonts'
+import { activeHighlight, hitHighlight, offsetsOf, rangeFor } from '../lib/highlights'
+import { hasSuper, superHtml, toggleSuper } from '../lib/richText'
 
 export const CSS_FONTS: Record<FontFamily, string> = {
   Helvetica: 'Helvetica, Arial, "Liberation Sans", "Helvetica Neue", sans-serif',
   Times: '"Times New Roman", Times, "Liberation Serif", serif',
   Courier: '"Courier New", Courier, "Liberation Mono", monospace',
+  Calibri: EMBEDDED_FONTS.Calibri!.css,
+  Cambria: EMBEDDED_FONTS.Cambria!.css,
+  Georgia: EMBEDDED_FONTS.Georgia!.css,
+  Garamond: EMBEDDED_FONTS.Garamond!.css,
+  OpenSans: EMBEDDED_FONTS.OpenSans!.css,
+  Roboto: EMBEDDED_FONTS.Roboto!.css,
+  Lato: EMBEDDED_FONTS.Lato!.css,
 }
 
 interface Props {
@@ -21,23 +31,90 @@ interface Props {
   onStartEdit: (at: { x: number; y: number } | null) => void
   onStopEdit: (e: React.FocusEvent | null) => void
   onChange: (patch: Partial<TextOverlay>, coalesce?: string) => void
+  /** Search matches in this box (character offsets). */
+  marks?: { start: number; end: number; active: boolean }[]
+  /** Smart guides: proposed top-left + size → snapped top-left (`free` = snapping off). */
+  snap?: (box: { x: number; y: number; w: number; h: number }, free: boolean) => { x: number; y: number }
+  onDragEnd?: () => void
+}
+
+/** Toggles superscript on the selected characters of the box being edited (keeps the selection). */
+export function toggleSuperInSelection(el: HTMLElement): boolean {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return false
+  const off = offsetsOf(el, sel.getRangeAt(0))
+  if (!off) return false
+  const next = toggleSuper(sel.toString())
+  document.execCommand('insertText', false, next)
+  const r = rangeFor(el, off.start, off.start + next.length)
+  if (r) {
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+  return true
 }
 
 type Drag =
   | { kind: 'move'; sx: number; sy: number; ox: number; oy: number; moved: boolean; clickToEdit: boolean }
   | { kind: 'left' | 'right'; sx: number; sy: number; ox: number; ow: number }
 
-export function TextBox({ overlay: o, scale, rotation, selected, editing, caretAt, onSelect, onStartEdit, onStopEdit, onChange }: Props) {
+export function TextBox({ overlay: o, scale, rotation, selected, editing, caretAt, onSelect, onStartEdit, onStopEdit, onChange, marks, snap, onDragEnd }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const drag = useRef<Drag | null>(null)
   const [live, setLive] = useState<{ x: number; y: number; width: number } | null>(null)
+  const html = useRef<string | null>(null)
 
   // The DOM owns the text while editing (so the caret never jumps); React only
   // writes it when it differs from what the model says (undo/redo, external edits).
+  // Not editing, superscripts are drawn as smaller raised characters (like the export).
   useLayoutEffect(() => {
     const el = ref.current
-    if (el && el.textContent !== o.text) el.textContent = o.text
-  }, [o.text])
+    if (!el) return
+    if (!editing && hasSuper(o.text)) {
+      const h = superHtml(o.text, o.fontSize * scale)
+      if (html.current !== h) {
+        el.innerHTML = h
+        html.current = h
+      }
+      return
+    }
+    if (el.textContent !== o.text || html.current !== null) {
+      el.textContent = o.text
+      html.current = null
+    }
+  }, [o.text, editing, o.fontSize, scale])
+
+  // search matches, painted with the CSS Custom Highlight API
+  const marksKey = marks?.map((m) => `${m.start}-${m.end}-${m.active ? 1 : 0}`).join(',') ?? ''
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || !marks?.length || !hitHighlight || !activeHighlight) return
+    const placed: { r: Range; active: boolean }[] = []
+    for (const m of marks) {
+      const r = rangeFor(el, m.start, m.end)
+      if (!r) continue
+      ;(m.active ? activeHighlight : hitHighlight).add(r)
+      placed.push({ r, active: m.active })
+    }
+    return () => placed.forEach((p) => (p.active ? activeHighlight : hitHighlight)!.delete(p.r))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marksKey, o.text, editing, scale])
+  const activeMark = marks?.find((m) => m.active)
+  useEffect(() => {
+    if (activeMark) ref.current?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMark?.start, activeMark?.end, !!activeMark])
+
+  // panel buttons: superscript on the selection
+  useEffect(() => {
+    if (!editing) return
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ overlayId: string }>).detail
+      if (d.overlayId === o.id && ref.current) toggleSuperInSelection(ref.current)
+    }
+    window.addEventListener('toolbox:superscript', on)
+    return () => window.removeEventListener('toolbox:superscript', on)
+  }, [editing, o.id])
 
   useEffect(() => {
     const el = ref.current
@@ -113,7 +190,15 @@ export function TextBox({ overlay: o, scale, rotation, selected, editing, caretA
     if (d.kind === 'move') {
       if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) return
       d.moved = true
-      setLive({ x: d.ox + dx, y: d.oy + dy, width: o.width })
+      let nx = d.ox + dx
+      let ny = d.oy + dy
+      const el = ref.current
+      if (snap && el) {
+        const p = snap({ x: nx, y: ny, w: el.offsetWidth / scale, h: el.offsetHeight / scale }, e.altKey)
+        nx = p.x
+        ny = p.y
+      }
+      setLive({ x: nx, y: ny, width: o.width })
     } else if (d.kind === 'right') {
       setLive({ x: d.ox, y: o.y, width: Math.max(16, d.ow + dx) })
     } else {
@@ -133,6 +218,7 @@ export function TextBox({ overlay: o, scale, rotation, selected, editing, caretA
     }
     const l = live
     setLive(null)
+    onDragEnd?.()
     if (d.kind === 'move') {
       if (d.moved && l) onChange({ x: l.x, y: l.y }, `mv:${o.id}`)
       else if (d.clickToEdit) onStartEdit({ x: e.clientX, y: e.clientY })
@@ -163,7 +249,7 @@ export function TextBox({ overlay: o, scale, rotation, selected, editing, caretA
           whiteSpace: o.wrap || live ? 'pre-wrap' : 'pre',
           lineHeight: o.lineHeight ?? LINE_HEIGHT,
           minHeight: fs * (o.lineHeight ?? LINE_HEIGHT),
-          textDecoration: o.underline ? 'underline' : undefined,
+          textDecoration: [o.underline && 'underline', o.strike && 'line-through'].filter(Boolean).join(' ') || undefined,
           textUnderlineOffset: '0.12em',
           outline: showFrame ? '1.5px solid #1075dc' : undefined,
           outlineOffset: 2,
@@ -187,6 +273,13 @@ export function TextBox({ overlay: o, scale, rotation, selected, editing, caretA
             e.preventDefault()
             ;(e.currentTarget as HTMLElement).blur()
           }
+          const mod = e.metaKey || e.ctrlKey
+          // ⇧⌘= superscript (Word's shortcut); ⌘F / ⌘G are the find bar's
+          if (mod && e.shiftKey && (e.key === '+' || e.key === '=')) {
+            e.preventDefault()
+            toggleSuperInSelection(e.currentTarget as HTMLElement)
+          }
+          if (mod && /^[fg]$/i.test(e.key)) return
           e.stopPropagation()
         }}
         onPaste={(e) => {

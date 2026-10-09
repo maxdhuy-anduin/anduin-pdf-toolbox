@@ -1,9 +1,20 @@
 import { createContext, useContext, type Dispatch } from 'react'
 import type { Action, DocState } from './lib/model'
 import type { ProviderId } from './lib/layout/types'
+import type { Hit } from './lib/search'
+import type { Margins, Unit } from './lib/margins'
 
-/** select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box · add-line = draw a line */
-export type Tool = 'select' | 'edit' | 'add-text' | 'add-line'
+/**
+ * select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box ·
+ * add-line = draw a line · add-shape = draw a shape · add-footnote = click after a word to add a footnote
+ */
+export type Tool = 'select' | 'edit' | 'add-text' | 'add-line' | 'add-shape' | 'add-footnote'
+
+/** Find bar results shown on the pages. */
+export interface SearchView {
+  hits: Hit[]
+  activeId: string | null
+}
 export type ZoomState = { mode: 'fit' } | { mode: 'custom'; value: number }
 export type ToastKind = 'info' | 'success' | 'warning' | 'error'
 
@@ -51,6 +62,15 @@ export interface AppCtx {
   /** Bumped when the active layout provider changes. */
   layoutProvider: ProviderId
   setLayoutProvider: (id: ProviderId) => void
+  search: SearchView | null
+  /** Rulers along the viewer, with the page margins. */
+  showRulers: boolean
+  setShowRulers: (v: boolean) => void
+  rulerUnit: Unit
+  setRulerUnit: (u: Unit) => void
+  /** Margins set on the ruler (all pages); null = detected per page. */
+  customMargins: Margins | null
+  setCustomMargins: (m: Margins | null) => void
 }
 
 export const AppContext = createContext<AppCtx | null>(null)

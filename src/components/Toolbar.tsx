@@ -1,6 +1,9 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, Slash, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, Ruler, ScanLine, Search, Slash, SquareDashed, Superscript, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
+import { OPEN_SHAPES, type ShapeKind } from '../lib/model'
+import { shapeStyle } from '../lib/objects'
+import { shapePath, SHAPE_LABELS } from '../lib/shapes'
 import { PROVIDERS } from '../lib/layout/provider'
 import { Divider, Menu, ToolBtn } from './ui'
 import { MAX_ZOOM, MIN_ZOOM } from './Viewer'
@@ -14,10 +17,31 @@ interface Props {
   onDelete: () => void
   onOpenTestSuite: () => void
   onOrganize: () => void
+  onFind: () => void
 }
 
-export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite, onOrganize }: Props) {
-  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, layoutProvider, setLayoutProvider } = useApp()
+/** Small preview of a shape kind (icons in the picker). */
+export function ShapeIcon({ kind, size = 16 }: { kind: ShapeKind; size?: number }) {
+  const pad = 1.5
+  const w = size - 2 * pad
+  const h = kind === 'rect' || kind === 'rounded' || kind === 'arrow' ? w * 0.72 : w
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
+      <path
+        d={shapePath(kind, w, h)}
+        transform={`translate(${pad} ${(size - h) / 2})`}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={OPEN_SHAPES.has(kind) ? 1.8 : 1.4}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite, onOrganize, onFind }: Props) {
+  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, layoutProvider, setLayoutProvider, showRulers, setShowRulers } = useApp()
   const n = state.pages.length
   const scanned = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId]?.likelyScanned : false
   const has = targetIds.length > 0
@@ -36,7 +60,26 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
       {toolBtn('select', <MousePointer2 size={16} />, 'Select', 'V')}
       {toolBtn('edit', <PencilLine size={16} />, 'Edit', 'E', !!scanned, scanned ? 'Editing is unavailable: this page appears to be scanned/image-based' : 'Edit PDF content: paragraphs, tables, lines and images (E)')}
       {toolBtn('add-text', <Type size={16} />, 'Add Text', 'T')}
-      {toolBtn('add-line', <Slash size={16} />, 'Add Line', 'L', false, 'Draw a line: drag on the page, hold Shift for straight / 45° (L)')}
+      {toolBtn('add-line', <Slash size={16} />, 'Add Line', 'L', false, 'Draw a line or arrow: drag on the page, hold Shift for straight / 45° (L)')}
+      <Menu
+        align="left"
+        trigger={(toggle) => (
+          <ToolBtn icon={<ShapeIcon kind={shapeStyle.shape} />} label="Shapes" title="Add a shape: rectangle, circle, triangle, star, arrow, check mark… (S)" active={tool === 'add-shape'} onClick={toggle} />
+        )}
+        items={[
+          { label: 'Draw a shape · Shift = square / circle', heading: true },
+          ...(Object.keys(SHAPE_LABELS) as ShapeKind[]).map((k) => ({
+            label: SHAPE_LABELS[k],
+            icon: <ShapeIcon kind={k} size={18} />,
+            checked: tool === 'add-shape' && shapeStyle.shape === k,
+            onClick: () => {
+              shapeStyle.shape = k
+              setTool('add-shape')
+            },
+          })),
+        ]}
+      />
+      {toolBtn('add-footnote', <Superscript size={16} />, 'Footnote', 'N', false, 'Add a footnote: click right after a word; the note goes to the bottom of the page (N)')}
       <Divider />
       <ToolBtn icon={<LayoutGrid size={16} />} label="Organize" onClick={onOrganize} title="Organize pages: reorder by drag and drop, extract ranges, rotate, delete" />
       <ToolBtn icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />
@@ -70,6 +113,8 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
         <ToolBtn iconOnly icon={<ZoomIn size={16} />} label="Zoom in" onClick={() => zoomBy(1)} disabled={scale >= MAX_ZOOM - 0.005} />
         <ToolBtn icon={<ScanLine size={16} />} label="Fit width" active={zoom.mode === 'fit'} onClick={() => setZoom({ mode: 'fit' })} />
         <Divider />
+        <ToolBtn iconOnly icon={<Search size={16} />} label="Find and replace" title="Find and replace (⌘F)" onClick={onFind} />
+        <ToolBtn iconOnly icon={<Ruler size={16} />} label="Rulers" title="Show rulers and page margins (R)" active={showRulers} onClick={() => setShowRulers(!showRulers)} />
         <ToolBtn icon={<SquareDashed size={16} />} label="Boxes" active={showBoxes} onClick={() => setShowBoxes(!showBoxes)} title="Show bounding boxes of detected objects (B)" />
         <Menu
           trigger={(toggle) => <ToolBtn iconOnly icon={<Ellipsis size={16} />} label="More options" onClick={toggle} active={debug} />}
@@ -77,6 +122,7 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
             { label: 'View', heading: true },
             { label: 'Show bounding boxes', hint: 'B', checked: showBoxes, onClick: () => setShowBoxes(!showBoxes) },
             { label: 'Show detected objects', hint: '⇧⌘D', checked: debug, onClick: () => setDebug(!debug) },
+            { label: 'Show rulers', hint: 'R', checked: showRulers, onClick: () => setShowRulers(!showRulers) },
             { label: 'Layout engine', heading: true },
             ...PROVIDERS.map((p) => ({
               label: p.label,

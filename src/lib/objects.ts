@@ -7,10 +7,20 @@
 
 import { graphicOverlayFromObject, moveOverlayFor, sampleBox, sourceRef, textOverlayFromObject } from './content/edits'
 import type { Box, ContentObject, PageContent } from './content/types'
-import { isGraphic, isLine, isMove, isPaste, isText, lineBounds, pasteBounds, uid, type LineOverlay, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type SourceRef, type TextOverlay } from './model'
+import { isGraphic, isLine, isMove, isPaste, isShape, isText, lineBounds, pasteBounds, shapeBounds, uid, type LineOverlay, type MoveOverlay, type Overlay, type OverlayPatch, type PageModel, type ShapeKind, type ShapeOverlay, type SourceRef, type TextOverlay } from './model'
 
 /** Style for the next drawn line: the last one the user picked. */
-export const lineStyle: Pick<LineOverlay, 'color' | 'thickness' | 'dash'> = { color: '#141414', thickness: 1, dash: 'solid' }
+export const lineStyle: Pick<LineOverlay, 'color' | 'thickness' | 'dash' | 'arrow'> = { color: '#141414', thickness: 1, dash: 'solid', arrow: 'none' }
+
+/** Kind and style for the next drawn shape: the last one the user picked. */
+export const shapeStyle: { shape: ShapeKind } & Pick<ShapeOverlay, 'stroke' | 'fill' | 'thickness' | 'dash' | 'opacity'> = {
+  shape: 'rect',
+  stroke: '#141414',
+  fill: null,
+  thickness: 1,
+  dash: 'solid',
+  opacity: 1,
+}
 
 export interface Item {
   key: string
@@ -51,6 +61,7 @@ export function pageItems(content: PageContent | undefined, overlays: Overlay[],
   for (const o of overlays) {
     if (isPaste(o)) items.push({ key: ovKey(o.id), overlay: o, bounds: pasteBounds(o) })
     else if (isLine(o)) items.push({ key: ovKey(o.id), overlay: o, bounds: lineBounds(o) })
+    else if (isShape(o)) items.push({ key: ovKey(o.id), overlay: o, bounds: shapeBounds(o) })
     else if (isGraphic(o) && !o.deleted) items.push({ key: ovKey(o.id), overlay: o, bounds: { x: o.x, y: o.y, w: o.w, h: o.h } })
     else if (isText(o) && o.text.trim()) {
       const m = measure?.(o.id)
@@ -199,7 +210,7 @@ export function planMove(page: PageModel, content: PageContent | undefined, keys
     if (!o) continue
     if (isPaste(o) || isMove(o)) res.update.push({ id, patch: { dx: o.dx + dx, dy: o.dy + dy } })
     else if (isLine(o)) res.update.push({ id, patch: { x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy } })
-    else if (isText(o) || isGraphic(o)) res.update.push({ id, patch: { x: o.x + dx, y: o.y + dy } })
+    else if (isText(o) || isGraphic(o) || isShape(o)) res.update.push({ id, patch: { x: o.x + dx, y: o.y + dy } })
   }
   return res
 }
@@ -266,6 +277,8 @@ export interface CopiedSelection {
   texts: TextOverlay[]
   /** Drawn lines, relative to the selection's top-left. */
   lines: LineOverlay[]
+  /** Drawn shapes, relative to the selection's top-left. */
+  shapes?: ShapeOverlay[]
 }
 
 /** Captures the selection with positions normalized to its top-left corner. Synchronous (no PDF work). */
@@ -286,6 +299,7 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
   }
   const texts: TextOverlay[] = []
   const drawn: LineOverlay[] = []
+  const shapes: ShapeOverlay[] = []
   const lines: string[] = []
   const { objIds, ovIds } = split(keys)
   const moves = new Map(page.overlays.filter(isMove).map((m) => [m.source.objectId, m]))
@@ -323,8 +337,10 @@ export function copySelection(page: PageModel, content: PageContent | undefined,
       lines.push(o.text)
     } else if (isLine(o)) {
       drawn.push({ ...o, id: uid('ln'), x1: o.x1 - origin.x, y1: o.y1 - origin.y, x2: o.x2 - origin.x, y2: o.y2 - origin.y })
+    } else if (isShape(o)) {
+      shapes.push({ ...o, id: uid('sh'), x: o.x - origin.x, y: o.y - origin.y })
     }
   }
-  if (!groups.size && !texts.length && !drawn.length) return null
-  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts, lines: drawn }
+  if (!groups.size && !texts.length && !drawn.length && !shapes.length) return null
+  return { text: lines.join('\n'), size: { w: box.w, h: box.h }, origin, groups: [...groups.values()], texts, lines: drawn, shapes }
 }

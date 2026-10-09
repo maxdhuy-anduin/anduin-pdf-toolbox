@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
-import { AppContext, type AppCtx, type ObjectSelection, type ObjectsSelection, type Tool, type ToastKind, type ZoomState } from './context'
+import { AppContext, type AppCtx, type ObjectSelection, type ObjectsSelection, type SearchView, type Tool, type ToastKind, type ZoomState } from './context'
+import { FindBar } from './components/FindBar'
+import type { Margins, Unit } from './lib/margins'
 import { EmptyState } from './components/EmptyState'
 import { ExtractDialog, type ExtractRequest } from './components/ExtractDialog'
 import { Header } from './components/Header'
@@ -27,6 +29,15 @@ import type { ProviderId } from './lib/layout/types'
 import { createLayoutSuite, LAYOUT_SUITE_NAME } from './lib/testDocs'
 import { getSourceBytes, hasSource, LARGE_FILE_BYTES, openPdfBytes, openPdfFile, PdfError, releaseSource } from './lib/pdfjs'
 import { createSampleFund, SAMPLE_FUND_NAME } from './lib/samples'
+
+const TOOL_HINTS: Record<Tool, [string, string]> = {
+  select: ['Select', ''],
+  edit: ['Edit', 'Drag to move (pink guides snap, ⌥ = free) · drag empty space or Shift-click to select several · ⌘C ⌘V · double-click text to edit'],
+  'add-text': ['Add text', 'Click on a page to place a text box · Esc to cancel'],
+  'add-line': ['Add line', 'Drag on a page to draw a line · Shift = straight / 45° · Esc to cancel'],
+  'add-shape': ['Add shape', 'Drag on a page to draw · Shift = square / circle · click for a default size · Esc to cancel'],
+  'add-footnote': ['Footnote', 'Click right after a word: a number goes there and the note at the bottom of the page · Esc to cancel'],
+}
 
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
 const isTyping = (t: EventTarget | null) => {
@@ -77,6 +88,36 @@ export default function App() {
   const [debug, setDebug] = useState(() => readFlag('debug'))
   const [showBoxes, setShowBoxesRaw] = useState(() => readFlag('boxes'))
   const [layoutProvider, setLayoutProviderRaw] = useState<ProviderId>('local')
+  const [search, setSearch] = useState<SearchView | null>(null)
+  const [find, setFind] = useState<{ open: boolean; replace: boolean; nonce: number; step: { dir: 1 | -1; nonce: number } | null }>({ open: false, replace: false, nonce: 0, step: null })
+  const findRef = useRef(find)
+  findRef.current = find
+  const [showRulers, setShowRulersRaw] = useState(() => readFlag('rulers'))
+  const setShowRulers = useCallback((v: boolean) => {
+    setShowRulersRaw(v)
+    writeFlag('rulers', v)
+  }, [])
+  const showRulersRef = useRef(showRulers)
+  showRulersRef.current = showRulers
+  const [rulerUnit, setRulerUnitRaw] = useState<Unit>(() => {
+    try {
+      const u = localStorage.getItem('toolbox.rulerUnit') as Unit | null
+      return u && ['in', 'cm', 'mm', 'pt'].includes(u) ? u : 'in'
+    } catch {
+      return 'in'
+    }
+  })
+  const setRulerUnit = useCallback((u: Unit) => {
+    setRulerUnitRaw(u)
+    try {
+      localStorage.setItem('toolbox.rulerUnit', u)
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }, [])
+  const [customMargins, setCustomMargins] = useState<Margins | null>(null)
+  const openFind = useCallback((replace: boolean) => setFind((f) => ({ ...f, open: true, replace: replace || (f.open && f.replace), nonce: f.nonce + 1 })), [])
+  const closeFind = useCallback(() => setFind((f) => ({ ...f, open: false })), [])
   const selectedObjectRef = useRef(selectedObject)
   selectedObjectRef.current = selectedObject
   const objSelRef = useRef(objSel)
@@ -340,6 +381,17 @@ export default function App() {
         fileInput.current?.click()
         return
       }
+      if (s.pages.length && !organizeRef.current && mod && (e.key.toLowerCase() === 'f' || e.code === 'KeyF')) {
+        e.preventDefault()
+        openFind(e.altKey)
+        return
+      }
+      if (s.pages.length && findRef.current.open && mod && e.key.toLowerCase() === 'g') {
+        e.preventDefault()
+        const dir = e.shiftKey ? -1 : 1
+        setFind((f) => ({ ...f, step: { dir, nonce: (f.step?.nonce ?? 0) + 1 } }))
+        return
+      }
       if (typing) return
       if (mod && e.key.toLowerCase() === 'a' && organizeRef.current) {
         e.preventDefault()
@@ -409,11 +461,14 @@ export default function App() {
         if (!(cur && s.sources[cur.sourceId].likelyScanned)) setTool('edit')
       } else if (e.key === 't' || e.key === 'T') setTool('add-text')
       else if (e.key === 'l' || e.key === 'L') setTool('add-line')
+      else if (e.key === 's' || e.key === 'S') setTool('add-shape')
+      else if (e.key === 'n' || e.key === 'N') setTool('add-footnote')
+      else if (e.key === 'r' || e.key === 'R') setShowRulers(!showRulersRef.current)
       else if (e.key === 'b' || e.key === 'B') setShowBoxes(!showBoxesRef.current)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes])
+  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes, openFind, setShowRulers])
 
   // ---- copy / cut / paste of PDF objects ---------------------------------------
   const pasteCount = useRef<{ id: string; n: number }>({ id: '', n: 0 })
@@ -518,6 +573,7 @@ export default function App() {
         }
         for (const t of sel.texts) add.push({ ...t, id: uid('tx'), x: t.x + tx, y: t.y + ty })
         for (const l of sel.lines ?? []) add.push({ ...l, id: uid('ln'), x1: l.x1 + tx, y1: l.y1 + ty, x2: l.x2 + tx, y2: l.y2 + ty })
+        for (const sh of sel.shapes ?? []) add.push({ ...sh, id: uid('sh'), x: sh.x + tx, y: sh.y + ty })
         dispatch({ type: 'editOverlays', pageId: page.id, add })
         setObjSel({ pageId: page.id, keys: add.map((o) => `v:${o.id}`) })
         if (!samePage) toast('success', `Pasted ${add.length > 1 ? `${add.length} blocks` : 'content'} on page ${currentIndexRef.current + 1}.`)
@@ -599,7 +655,8 @@ export default function App() {
   const ctx: AppCtx = {
     state, dispatch, tool, setTool, zoom, setZoom, scale, setScale, currentIndex, setCurrentIndex, scrollToPage, scrollRequest, toast,
     objSel, setObjSel, selectedObject, setSelectedObject, editRequest, requestEdit, debug, setDebug: toggleDebug,
-    showBoxes, setShowBoxes, layoutProvider, setLayoutProvider,
+    showBoxes, setShowBoxes, layoutProvider, setLayoutProvider, search, showRulers, setShowRulers, rulerUnit, setRulerUnit,
+    customMargins, setCustomMargins,
   }
 
   // in Organize, Insert defaults to "after the last selected page" (or the end)
@@ -627,7 +684,7 @@ export default function App() {
           <OrganizePages onClose={closeOrganize} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} />
         ) : hasDoc ? (
           <>
-            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} onOrganize={openOrganize} />
+            <Toolbar targetIds={targetIds} onInsert={() => setInsertFiles([])} onExtract={openExtract} onDelete={deleteTargets} onOpenTestSuite={openTestSuite} onOrganize={openOrganize} onFind={() => openFind(false)} />
             {showScannedBanner && (
               <div role="status" className="flex items-center gap-2.5 border-b border-line bg-coral-soft px-4 py-2 text-[13px] text-ink">
                 <AlertTriangle size={15} className="shrink-0 text-coral" />
@@ -644,10 +701,21 @@ export default function App() {
               <ThumbnailPanel />
               <div className="relative flex min-w-0 flex-1">
                 <Viewer />
-                {tool !== 'select' && (
-                  <div className="pointer-events-none absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lg">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{tool === 'add-text' ? 'Add text' : tool === 'add-line' ? 'Add line' : 'Edit'}</span>
-                    {tool === 'add-text' ? 'Click on a page to place a text box · Esc to cancel' : tool === 'add-line' ? 'Drag on a page to draw a line · Shift = straight / 45° · Esc to cancel' : 'Drag to move · drag empty space or Shift-click to select several · ⌘C ⌘V · double-click text to edit'}
+                {find.open && (
+                  <FindBar
+                    focusNonce={find.nonce}
+                    replaceOpen={find.replace}
+                    setReplaceOpen={(v) => setFind((f) => ({ ...f, replace: v }))}
+                    stepRequest={find.step}
+                    onClose={closeFind}
+                    setSearch={setSearch}
+                    top={showRulers ? 32 : 12}
+                  />
+                )}
+                {tool !== 'select' && !find.open && (
+                  <div className="pointer-events-none absolute left-1/2 z-20 flex w-max max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-2.5 bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lg" style={{ top: showRulers ? 32 : 12 }}>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{TOOL_HINTS[tool][0]}</span>
+                    {TOOL_HINTS[tool][1]}
                   </div>
                 )}
               </div>

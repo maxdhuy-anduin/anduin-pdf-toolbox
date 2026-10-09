@@ -9,7 +9,7 @@
 //   5. roles (heading / paragraph / list-item / header / footer), alignment, line height
 //   6. operator ownership (can an object's operators be hidden without hiding anything else?)
 import type { FontFamily } from '../model'
-import type { Box, ContentObject, PageContent, RawPage, RawText, Role, TextStyle } from './types'
+import type { Box, ContentObject, PageContent, RawPage, RawText, Role, TextRun, TextStyle } from './types'
 
 // ---------------------------------------------------------------------------
 // font classification
@@ -23,6 +23,14 @@ export function classifyFont(name: string, generic: string, flags: { bold?: bool
   if (/courier|mono|consolas|menlo|typewriter|lucida console/i.test(n) || generic === 'monospace') family = 'Courier'
   else if (/times|georgia|garamond|palatino|cambria|minion|bookman|century|baskerville|caslon|serif/i.test(n) && !/sans/i.test(n)) family = 'Times'
   else if (generic === 'serif' && !/arial|helvet|calibri|verdana|tahoma|sans|gothic|segoe|roboto|inter|manrope/i.test(n)) family = 'Times'
+  // families the app can embed (same metrics or design): edits keep the look of the original
+  if (/calibri|carlito/i.test(n)) family = 'Calibri'
+  else if (/cambria|caladea/i.test(n)) family = 'Cambria'
+  else if (/georgia|gelasio/i.test(n)) family = 'Georgia'
+  else if (/garamond/i.test(n)) family = 'Garamond'
+  else if (/opensans|open sans/i.test(n)) family = 'OpenSans'
+  else if (/roboto/i.test(n) && !/mono|slab/i.test(n)) family = 'Roboto'
+  else if (/\blato/i.test(n)) family = 'Lato'
   return { family, bold, italic }
 }
 
@@ -593,7 +601,7 @@ export function analyzePage(raw: RawPage): PageContent {
     add({
       id: l.id, type: 'TEXT_LINE', parent, children: spans, zIndex: 0, editable: false,
       bounds: lineBox(l), sourceItems: l.items.map((i) => i.idx), ops: [...new Set(l.items.flatMap((i) => i.ops))], opsExclusive: false,
-      text: l.text, firstBaseline: l.baseline,
+      text: l.text, firstBaseline: l.baseline, textRuns: joinWithRuns(l.items).runs,
       style: dominantStyle(l.items, 'left', 1.2),
     })
   }
@@ -610,16 +618,24 @@ function contains(box: Box, l: { x: number; right: number; top: number; bottom: 
 }
 
 function joinItems(items: Item[]): string {
+  return joinWithRuns(items).text
+}
+
+/** Joined text of items plus, for each item, the character range it produced and its x extent. */
+function joinWithRuns(items: Item[]): { text: string; runs: TextRun[] } {
   let s = ''
+  const out: TextRun[] = []
   items.forEach((it, i) => {
     if (i > 0) {
       const p = items[i - 1]
       const gap = it.x - (p.x + p.width)
       if (gap > 0.12 * it.size && !/\s$/.test(s) && !/^\s/.test(it.str)) s += ' '
     }
+    out.push({ s: s.length, e: s.length + it.str.length, x0: it.x, x1: it.x + it.width, family: it.family })
     s += it.str
   })
-  return s.replace(/\s+$/, '')
+  const text = s.replace(/\s+$/, '')
+  return { text, runs: out.filter((r) => r.s < text.length).map((r) => ({ ...r, e: Math.min(r.e, text.length) })) }
 }
 
 function makeLine(id: string, its: Item[]): Line {

@@ -5,8 +5,8 @@ duplicate, rotate, insert, extract, and edit PDF content as objects** (paragraph
 lines, rectangles, images), then **export a real PDF**. Hackathon MVP, not an Acrobat replacement.
 
 **Privacy:** everything runs in the browser. There is no backend, no upload, no analytics and no third-party requests
-(PDF.js assets and the Manrope / IBM Plex Mono fonts are served locally). Documents are never written to storage; the only
-things remembered locally are the view toggles (boxes, debug). Copied objects stay in memory and are shared only with this
+(PDF.js assets, the UI fonts and the fonts used for text boxes are served by the app itself). Documents are never written to
+storage; the only things remembered locally are the view toggles (boxes, debug, rulers, ruler unit). Copied objects stay in memory and are shared only with this
 app's other open tabs (BroadcastChannel); they are never written to disk. The optional Adobe Extract provider is off unless
 `VITE_LAYOUT_SERVICE_URL` points at your own backend; it is never called by default.
 
@@ -40,7 +40,24 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
    `1-3, 5` in the range box to select; **Extract** takes the selection or any range (`8-`, `odd`, `last`…) into a new PDF,
    optionally one file per page and/or removing them from this document. Rotate, duplicate, delete, insert. **Done** or Esc
    goes back; double-click a page to open it.
-8. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
+8. **Find** (⌘F): `partner` finds 14 matches across the document; **Aa** = match case, **ab** = whole words only; Enter /
+   ⇧Enter step through them. **Replace** (⌥⌘F or the chevron) replaces one or all; **AB** (preserve case) turns
+   `Partnership` into `Membership` and `PARTNER` into `MEMBER`. Replace all is one undo step.
+9. **Shapes** (S, or the shape button): rectangle, rounded rectangle, ellipse/circle, triangle, diamond, pentagon, hexagon,
+   star, arrow, check mark and cross. Drag to draw (Shift = square / circle); outline, fill (or none), thickness, dash and
+   opacity in the panel; 8 handles resize (Shift keeps proportions). A drawn line can have arrowheads (none / end / start / both).
+10. **Footnote** (N): click right after a word in the PDF: a superscript number goes there (matching the text's font, size,
+    colour and baseline) and the note goes to the bottom of the page under a short rule, ready to type. Further notes stack
+    below; numbering continues through the document. While typing in a text box, **Insert footnote** puts the number at the
+    caret. **x²** (⇧⌘=) makes selected characters superscript (`1st` → `1ˢᵗ`); **S̶** strikes text through.
+11. **Smart guides**: drag anything in Edit mode (or a text box): pink lines show when it lines up with the page centre,
+    the margins or other objects' edges/centres, and pink measurements when it's evenly spaced (between two neighbours, the
+    same gap as the next pair, or centred between the page edges). It snaps there; hold ⌥ to move freely.
+12. **Rulers** (R, or the ruler button): inches / cm / mm / pt (click the corner), the page margins (drag the blue markers to
+    set your own for snapping and footnotes, double-click to go back to the detected ones) and the selection's extent.
+13. **Fonts**: text boxes can use Arial/Helvetica, Times New Roman, Courier New (standard PDF fonts) or Calibri, Cambria,
+    Georgia, Garamond, Open Sans, Roboto, Lato (embedded, see below). Vietnamese and other Latin-script text works with these.
+14. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
 
 **Seeing the layout model:** **Boxes** in the toolbar (or `B`, or `?boxes`) outlines every detected object by type: headings,
 paragraphs, lists, tables, cells, rules, rectangles and images. **⋯ → Show detected objects** (⇧⌘D, `?debug`) adds text lines
@@ -126,11 +143,35 @@ with its rules and fills.
 If an object cannot be matched safely (content inside a Form XObject, or a text operator shared with neighbouring content),
 that object falls back to a cover filled with the sampled background colour. The export toast reports the split.
 
+### Fonts
+
+Calibri, Cambria, Georgia and Garamond are Microsoft / Monotype fonts that can't be redistributed, so the app ships open-source
+equivalents (SIL Open Font License, in `public/fonts` with their licences): **Carlito** and **Caladea** have exactly the same
+character widths as Calibri and Cambria (text wraps identically); **Gelasio** is designed to match Georgia; **EB Garamond** is a
+Garamond revival; Open Sans, Roboto and Lato are the originals. The same files are used on screen (`@font-face`) and embedded
+(subset) in the export via `@pdf-lib/fontkit`, which is loaded only when an export uses one of them. The files were prepared
+with fontTools: static Regular/Bold/Italic/BoldItalic instances, Latin + Vietnamese + Greek + Cyrillic + common symbols, glyphs
+padded to 4 bytes (fontkit's subsetter corrupts fonts whose glyphs have odd lengths; a test checks every file). Edited PDF text
+in Calibri/Cambria/Georgia/Garamond/Open Sans/Roboto/Lato now keeps that font. If a font file can't be loaded, export falls back
+to the closest standard font and says so.
+
+### Find & replace, superscripts
+
+Find searches the PDF's own text (paragraphs and cells, at their moved place if moved) and every text box; highlights in PDF text
+are computed from the positions of the text items, highlights in text boxes use the CSS Custom Highlight API. Replacing PDF text
+re-types that paragraph or cell exactly as editing it by hand would. Superscripts are stored as Unicode superscript characters
+(¹ ² ³ ˢ ᵗ …), so text stays plain (search, copy, undo work); they are drawn as the normal character at 65 % size, raised
+0.35 em, both on screen and in the export, so they look right in every font.
+
 ## Known limitations
 
-- Replacement text uses the 14 standard PDF fonts (closest of Helvetica/Times/Courier, bold/italic preserved). Original
-  embedded fonts are not reused, so text in an unusual font looks different after editing. Characters outside WinAnsi
-  (e.g. Vietnamese `ả`, CJK) are flagged and exported as `?`. *Next step:* embed a Unicode font via `@pdf-lib/fontkit`.
+- Edited text uses the closest available font (the 3 standard PDF fonts or the 7 embedded families above, bold/italic
+  preserved); other original fonts are not reused. With the standard fonts, characters outside WinAnsi (e.g. Vietnamese `ả`,
+  CJK) are flagged and exported as `?`; the embedded fonts cover Latin (incl. Vietnamese), Greek and Cyrillic, not CJK.
+- Footnote numbers are assigned when inserted (next number in the document); they are not renumbered when notes are added
+  earlier in the document or deleted. Notes don't push body text up: the PDF has no reflow, drag them if they overlap.
+- Find doesn't search inside pasted blocks or scanned pages; replacing text that is part of the PDF re-types that paragraph.
+- Rulers' margins are a view setting (they don't change the PDF); dragging them is disabled on pages you rotated in the app.
 - Paragraph edits reflow within the original width; if the fallback font is wider, line breaks can differ.
 - Detection is heuristic and tuned on digitally generated business documents. Merged/spanning table cells, rotated text
   and complex vector art are not modelled. Content inside Form XObjects is detected but exported via covers.
@@ -147,14 +188,23 @@ that object falls back to a cover filled with the sampled background colour. The
 
 ## Shortcuts
 
-`V` select · `E` edit · `T` add text · `L` add line · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
+`V` select · `E` edit · `T` add text · `L` add line · `S` add shape · `N` footnote · `R` rulers · `⌘/Ctrl+F` find ·
+`⌥⌘/Ctrl+Alt+F` replace · `⌘/Ctrl+G` / `⇧⌘G` next / previous match · in a text box `⇧⌘=` superscript · while dragging `⌥` = no
+snapping · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
 on the page, `⌘/Ctrl+C` `X` `V` copy / cut / paste, arrows nudge the selection (`Shift` = 10 pt) · `Enter` edit the selected
 object · `Del` delete the selected objects / text box / pages · `Esc` deselect · `⌘/Ctrl+Z` undo · `⌘/Ctrl+Shift+Z` redo · `⌘/Ctrl+S` export ·
 `⌘/Ctrl+O` open · Organize: `⌘/Ctrl+A` select all pages, `Del` delete, `Esc` clear selection / back · `B` bounding boxes · `⇧⌘D` debug view.
 
 ## Verification status
 
-Automated (`npm test`, 102 tests): moving/deleting tables with empty cells creates no text boxes; drawn lines export as
+Automated (`npm test`, 130 tests): find (match case, whole words, typographic quotes, highlights inside the paragraph, moved
+and deleted paragraphs), replace (preserve case, PDF paragraph → edited text present in the export, text boxes, replace all
+across pages = one undo step); superscripts (smaller and raised in the export, still real text); strikethrough position;
+shapes (exact position also on a page with /Rotate 90, filled / open shapes, move / delete / copy); arrowheads; smart guides
+(edge and centre alignment, equal gaps, regular stacks, threshold); detected margins; footnotes (marker snapped to the end of
+a line with that line's size, note above the footer, stacking, export); embedded fonts (all 7 families, bold/italic,
+Vietnamese without `?`, Calibri wrapping, fallback with a warning, every font file survives subsetting glyph by glyph,
+font detection keeps families); moving/deleting tables with empty cells creates no text boxes; drawn lines export as
 vector lines; page-range parsing; rigid moves (whole ruled table moved: same cell text, font and size at the new place,
 nothing left behind; paragraph moved + another deleted; table deleted completely), paste from another page (original font,
 only the copied object), marquee rules, group move in one undo step, clipboard positions relative to the selection; layout model (canonical coordinates at every rotation, local adapter tree consistency,
@@ -165,11 +215,21 @@ chart false-positive guard, graphics); **true removal** (edited paragraph/cell/h
 neighbours intact, moved rule/deleted rectangle/moved+resized image verified by re-analysing the export); model, undo/redo,
 drafts, page operations and export round-trips.
 
-Exercised by hand in Chromium: Organize pages (range selection, dragging two pages to a new position, extract a range
+Exercised in Chromium (October 2026 additions): ⌘F with 11/3/14/4 matches for match case / whole words, stepping across
+pages, replace one + replace all with preserve case + a single undo, highlights in text boxes, closing clears them, ⌥⌘F from
+the find field; superscript of a selection (selection kept) and strikethrough; Footnote tool after a word (² placed after
+"Agreement." in the paragraph's font) and Insert footnote at the caret; every shape from the menu, restyle, corner resize,
+marquee + copy/paste of a shape and an arrow; smart guides mid-drag (margin and table-edge alignment, centred between the page
+edges) for shapes and text boxes; rulers in in/cm, margin drag and reset; all 10 fonts × 4 styles exported and re-opened, and
+the same features rendered by Apple's PDF engine (QuickLook); find on a 112-page document (≤ 70 ms per keystroke); regression:
+table drag, cell drag + undo, Organize, export.
+
+Exercised by hand in Chromium earlier: Organize pages (range selection, dragging two pages to a new position, extract a range
 with "delete after", undo, double-click to open); the ⋯ menu; dragging a table; marquee + Shift-click selection of heading, paragraph and table and
 moving them together; ⌘C/⌘V duplicate; ⌘V into a different document in a second browser tab, then export (pasted table is
 real text); Delete + undo; bounding boxes; debug inspector on a page rotated 90°; hover/select/edit/move on paragraphs, cells, table outline, rules, rectangles and images;
 debug view; edits on a rotated page; export → re-open in the app.
 
-**Not yet exercised:** OS file picker / drag-and-drop of real files, Firefox/Safari, and opening exports in
-Acrobat/Preview (they re-parse cleanly in pdf-lib and PDF.js). Check in Adobe Reader before circulating a real document.
+**Not yet exercised:** OS file picker / drag-and-drop of real files, Firefox/Safari (the find highlights inside text boxes need
+Safari 17.2+ / Firefox 140+), physical-keyboard Shift/⌥ during drags, and Acrobat (exports render correctly in PDF.js and Apple's
+PDF engine). Check in Adobe Reader before circulating a real document.

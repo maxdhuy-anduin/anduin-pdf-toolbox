@@ -1,7 +1,10 @@
 import { LineCapStyle, PDFDocument, StandardFonts, concatTransformationMatrix, degrees, drawObject, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { BASELINE_RATIO, canvasToPdf, pdfToCanvas, viewRectToUser, viewToUser } from './coords'
 import { editPageContent, keepOnly, type EditTarget, type UserRect } from './pdf/pageEdit'
-import { LINE_HEIGHT, isGraphic, isLine, isMove, isPaste, isText, type PageInfo, type PageModel, type SourceMeta, type SourceRef, type TextOverlay } from './model'
+import { LINE_HEIGHT, OPEN_SHAPES, isGraphic, isLine, isMove, isPaste, isShape, isText, type FontFamily, type PageInfo, type PageModel, type SourceMeta, type SourceRef, type TextOverlay } from './model'
+import { fontFile, loadFontBytes } from './fonts'
+import { fromSuper, measureRuns, runs, SUP_RISE, SUP_SCALE } from './richText'
+import { DASH, lineGeometry, shapePath } from './shapes'
 
 export type BytesGetter = (sourceId: string) => Uint8Array
 
@@ -18,8 +21,12 @@ function hexToRgb(hex: string) {
   return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255)
 }
 
+const SERIF = new Set<FontFamily>(['Times', 'Cambria', 'Georgia', 'Garamond'])
+
 function standardFontName(o: Pick<TextOverlay, 'fontFamily' | 'bold' | 'italic'>): StandardFonts {
-  const { fontFamily: f, bold: b, italic: i } = o
+  const { bold: b, italic: i } = o
+  // embedded families fall back to the closest standard font if their file can't be loaded
+  const f = o.fontFamily === 'Courier' ? 'Courier' : SERIF.has(o.fontFamily) ? 'Times' : 'Helvetica'
   if (f === 'Times') {
     return b ? (i ? StandardFonts.TimesRomanBoldItalic : StandardFonts.TimesRomanBold) : i ? StandardFonts.TimesRomanItalic : StandardFonts.TimesRoman
   }
@@ -123,12 +130,27 @@ export async function buildPdf(
   }
 
   const fontCache = new Map<string, PDFFont>()
+  let fontkitReady = false
+  let fontFallback = false
   const getFont = async (o: TextOverlay) => {
-    const name = standardFontName(o)
-    let f = fontCache.get(name)
+    const file = fontFile(o.fontFamily, o.bold, o.italic)
+    const key = file ?? standardFontName(o)
+    let f = fontCache.get(key)
     if (!f) {
-      f = await out.embedFont(name)
-      fontCache.set(name, f)
+      if (file) {
+        try {
+          if (!fontkitReady) {
+            out.registerFontkit((await import('@pdf-lib/fontkit')).default)
+            fontkitReady = true
+          }
+          f = await out.embedFont(await loadFontBytes(file), { subset: true })
+        } catch (e) {
+          console.warn('font embedding failed, using a standard font', e)
+          fontFallback = true
+          f = await out.embedFont(standardFontName(o))
+        }
+      } else f = await out.embedFont(key)
+      fontCache.set(key, f)
     }
     return f
   }
@@ -266,20 +288,50 @@ export async function buildPdf(
       }
     }
 
-    // lines drawn with Add Line
+    // shapes drawn with Add Shape: the same SVG path as on screen, anchored at the box's top-left
+    for (const o of model.overlays) {
+      if (!isShape(o) || o.w <= 0 || o.h <= 0) continue
+      const open = OPEN_SHAPES.has(o.shape)
+      const fill = open ? null : o.fill
+      if (!fill && !o.stroke) continue
+      const origin = viewToUser(info, o.x, o.y)
+      page.drawSvgPath(shapePath(o.shape, o.w, o.h), {
+        x: origin.x,
+        y: origin.y,
+        rotate: degrees(origin.angle),
+        ...(fill ? { color: hexToRgb(fill), opacity: o.opacity } : {}),
+        ...(o.stroke
+          ? {
+              borderColor: hexToRgb(o.stroke),
+              borderWidth: o.thickness,
+              borderOpacity: o.opacity,
+              borderDashArray: DASH(o.dash, o.thickness),
+              borderLineCap: o.dash === 'dotted' || open ? LineCapStyle.Round : LineCapStyle.Butt,
+            }
+          : {}),
+      })
+    }
+
+    // lines drawn with Add Line (arrowheads are filled triangles)
     for (const o of model.overlays) {
       if (!isLine(o)) continue
-      const a = viewToUser(info, o.x1, o.y1)
-      const b = viewToUser(info, o.x2, o.y2)
+      const g = lineGeometry(o)
+      const a = viewToUser(info, g.shaft.x1, g.shaft.y1)
+      const b = viewToUser(info, g.shaft.x2, g.shaft.y2)
       const t = o.thickness
       page.drawLine({
         start: { x: a.x, y: a.y },
         end: { x: b.x, y: b.y },
         thickness: t,
         color: hexToRgb(o.color),
-        dashArray: o.dash === 'dashed' ? [4 * t, 3 * t] : o.dash === 'dotted' ? [0, 2.5 * t] : undefined,
+        dashArray: DASH(o.dash, t),
         lineCap: o.dash === 'dotted' ? LineCapStyle.Round : LineCapStyle.Butt,
       })
+      for (const h of g.heads) {
+        const o0 = viewToUser(info, 0, 0)
+        const path = `M${h.map(([x, y]) => `${x} ${y}`).join(' L')} Z`
+        page.drawSvgPath(path, { x: o0.x, y: o0.y, rotate: degrees(o0.angle), color: hexToRgb(o.color) })
+      }
     }
 
     for (const o of model.overlays) {
@@ -288,13 +340,14 @@ export async function buildPdf(
       const supported = new Set(font.getCharacterSet())
       let cleaned = ''
       for (const ch of o.text.replace(/\r/g, '').replace(/\t/g, '    ')) {
-        if (ch === '\n' || supported.has(ch.codePointAt(0)!)) cleaned += ch
+        // superscripts are drawn as the normal character, smaller and raised
+        if (ch === '\n' || supported.has(fromSuper(ch).codePointAt(0)!)) cleaned += ch
         else {
           cleaned += '?'
           replacedChars = true
         }
       }
-      const measure = (s: string) => font.widthOfTextAtSize(s, o.fontSize)
+      const measure = (s: string) => measureRuns(s, (t) => font.widthOfTextAtSize(t, o.fontSize))
       // wrap paragraph by paragraph so justified text keeps each paragraph's last line ragged
       const lines: { text: string; last: boolean }[] = []
       for (const para of cleaned.split('\n')) {
@@ -306,6 +359,21 @@ export async function buildPdf(
       const base = o.fontSize * (BASELINE_RATIO[o.fontFamily] + (ratio - LINE_HEIGHT) / 2)
       const color = hexToRgb(o.color)
       const rot = (p: { angle: number }) => degrees(p.angle)
+      /** Draws mixed normal / superscript text with its baseline-left at (x, y) (view space). */
+      const drawRuns = (s: string, x: number, y: number) => {
+        let cx = x
+        for (const r of runs(s)) {
+          const size = r.sup ? o.fontSize * SUP_SCALE : o.fontSize
+          const p = viewToUser(info, cx, r.sup ? y - o.fontSize * SUP_RISE : y)
+          page.drawText(r.text, { x: p.x, y: p.y, size, font, color, rotate: rot(p) })
+          cx += font.widthOfTextAtSize(r.text, size)
+        }
+      }
+      const rule = (x: number, y: number, w: number) => {
+        const a = viewToUser(info, x, y)
+        const b = viewToUser(info, x + w, y)
+        page.drawLine({ start: { x: a.x, y: a.y }, end: { x: b.x, y: b.y }, thickness: Math.max(0.5, o.fontSize * 0.06), color })
+      }
       lines.forEach((line, idx) => {
         const trimmed = line.text.replace(/\s+$/, '')
         if (!trimmed) return
@@ -316,21 +384,18 @@ export async function buildPdf(
           const gap = (o.width - words.reduce((n, wd) => n + measure(wd), 0)) / (words.length - 1)
           let x = o.x
           for (const wd of words) {
-            const p = viewToUser(info, x, y)
-            page.drawText(wd, { x: p.x, y: p.y, size: o.fontSize, font, color, rotate: rot(p) })
+            drawRuns(wd, x, y)
             x += measure(wd) + gap
           }
         } else {
           const dx = o.align === 'center' ? (o.width - w) / 2 : o.align === 'right' ? o.width - w : 0
-          const p = viewToUser(info, o.x + dx, y)
-          page.drawText(trimmed, { x: p.x, y: p.y, size: o.fontSize, font, color, rotate: rot(p) })
+          drawRuns(trimmed, o.x + dx, y)
         }
-        if (o.underline) {
+        if (o.underline || o.strike) {
           const dx = o.align === 'center' ? (o.width - w) / 2 : o.align === 'right' ? o.width - w : 0
-          const ulW = o.align === 'justify' && o.wrap && !line.last && words.length > 1 ? o.width : w
-          const a = viewToUser(info, o.x + dx, y + o.fontSize * 0.12)
-          const b = viewToUser(info, o.x + dx + ulW, y + o.fontSize * 0.12)
-          page.drawLine({ start: { x: a.x, y: a.y }, end: { x: b.x, y: b.y }, thickness: Math.max(0.5, o.fontSize * 0.06), color })
+          const lw = o.align === 'justify' && o.wrap && !line.last && words.length > 1 ? o.width : w
+          if (o.underline) rule(o.x + dx, y + o.fontSize * 0.12, lw)
+          if (o.strike) rule(o.x + dx, y - o.fontSize * 0.27, lw)
         }
       })
     }
@@ -338,6 +403,7 @@ export async function buildPdf(
   if (replacedChars) {
     warnings.push('Some characters are not supported by the standard PDF fonts and were replaced with “?”.')
   }
+  if (fontFallback) warnings.push('A font could not be loaded, so some text was exported with the closest standard PDF font.')
   if (notMoved) warnings.push(`${notMoved} moved object${notMoved > 1 ? 's' : ''} could not be moved exactly in the exported file and ${notMoved > 1 ? 'were' : 'was'} left in the original position.`)
   if (pasteFailed) warnings.push('Some pasted content could not be exported because its source document is no longer loaded.')
   return { bytes: await out.save(), warnings, stats }
