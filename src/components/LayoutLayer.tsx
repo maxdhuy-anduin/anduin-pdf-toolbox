@@ -72,12 +72,10 @@ interface Props {
  * inside the page's rotated container, so zoom, scrolling, app rotation and resizing all apply.
  *  - "Show bounding boxes": structural chunks, subtle outlines
  *  - "Show detected objects" (debug): every chunk incl. lines/spans, tags, hover inspector
- *  - object tree focus: one highlighted chunk
  */
 export function LayoutLayer({ page, info, scale, edited }: Props) {
-  const { showBoxes, debug, treeFocus } = useApp()
-  const focusId = treeFocus?.pageId === page.id ? treeFocus.chunkId : null
-  const layout = useLayoutPage(page.sourceId, page.srcIndex, showBoxes || debug || !!focusId)
+  const { showBoxes, debug } = useApp()
+  const layout = useLayoutPage(page.sourceId, page.srcIndex, showBoxes || debug)
   const ref = useRef<HTMLDivElement>(null)
   const [hit, setHit] = useState<{ c: LayoutChunk; x: number; y: number } | null>(null)
 
@@ -108,7 +106,6 @@ export function LayoutLayer({ page, info, scale, edited }: Props) {
 
   if (!layout) return null
   const chunks = Object.values(layout.chunks).filter((c) => debug || (showBoxes && STRUCTURAL.has(c.type)))
-  const focus = focusId ? layout.chunks[focusId] : null
   const box = (c: LayoutChunk, pad = 0): React.CSSProperties => ({
     position: 'absolute',
     left: (c.bounds.x - pad) * scale,
@@ -148,14 +145,6 @@ export function LayoutLayer({ page, info, scale, edited }: Props) {
             </div>
           )
         })}
-      {focus && (
-        <>
-          <div style={{ ...box(focus, 2), outline: '2px solid #1075dc', background: 'rgba(63,166,238,0.14)' }} />
-          <div className="absolute whitespace-nowrap bg-sky-deep px-1.5 py-[1px] font-mono text-[10px] font-medium uppercase tracking-wide text-white" style={{ left: (focus.bounds.x - 2) * scale, top: (focus.bounds.y - 2) * scale - 18 }}>
-            {chunkTag(focus)}
-          </div>
-        </>
-      )}
       {debug && hit && createPortal(<Inspector c={hit.c} layout={layout} x={hit.x} y={hit.y} />, document.body)}
     </div>
   )

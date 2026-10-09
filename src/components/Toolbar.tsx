@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, ListTree, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, MousePointer2, PencilLine, RotateCcw, RotateCw, ScanLine, SquareDashed, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
 import { PROVIDERS } from '../lib/layout/provider'
@@ -16,7 +16,7 @@ interface Props {
 }
 
 export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSuite }: Props) {
-  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, showTree, setShowTree, layoutProvider, setLayoutProvider } = useApp()
+  const { state, dispatch, tool, setTool, scale, setZoom, zoom, currentIndex, scrollToPage, debug, setDebug, showBoxes, setShowBoxes, layoutProvider, setLayoutProvider } = useApp()
   const n = state.pages.length
   const scanned = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId]?.likelyScanned : false
   const has = targetIds.length > 0
@@ -68,14 +68,12 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
         <ToolBtn icon={<ScanLine size={16} />} label="Fit width" active={zoom.mode === 'fit'} onClick={() => setZoom({ mode: 'fit' })} />
         <Divider />
         <ToolBtn icon={<SquareDashed size={16} />} label="Boxes" active={showBoxes} onClick={() => setShowBoxes(!showBoxes)} title="Show bounding boxes of detected objects (B)" />
-        <ToolBtn icon={<ListTree size={16} />} label="Tree" active={showTree} onClick={() => setShowTree(!showTree)} title="Show the object tree of the current page" />
         <Menu
           trigger={(toggle) => <ToolBtn iconOnly icon={<Ellipsis size={16} />} label="More options" onClick={toggle} active={debug} />}
           items={[
             { label: 'View', heading: true },
             { label: 'Show bounding boxes', hint: 'B', checked: showBoxes, onClick: () => setShowBoxes(!showBoxes) },
             { label: 'Show detected objects', hint: '⇧⌘D', checked: debug, onClick: () => setDebug(!debug) },
-            { label: 'Show object tree', checked: showTree, onClick: () => setShowTree(!showTree) },
             { label: 'Layout engine', heading: true },
             ...PROVIDERS.map((p) => ({
               label: p.label,

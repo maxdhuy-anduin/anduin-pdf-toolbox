@@ -39,12 +39,6 @@ export interface AppCtx {
   /** Subtle bounding boxes for detected layout objects. */
   showBoxes: boolean
   setShowBoxes: (v: boolean) => void
-  /** Object tree panel for the current page. */
-  showTree: boolean
-  setShowTree: (v: boolean) => void
-  /** Layout chunk highlighted from the object tree (hover or pinned). */
-  treeFocus: { pageId: string; chunkId: string; pinned: boolean } | null
-  setTreeFocus: (f: { pageId: string; chunkId: string; pinned: boolean } | null) => void
   /** Bumped when the active layout provider changes. */
   layoutProvider: ProviderId
   setLayoutProvider: (id: ProviderId) => void

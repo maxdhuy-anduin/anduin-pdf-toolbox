@@ -65,7 +65,12 @@ interface ImageMark {
   ctm: M
   bbox: UserRect
 }
-type Mark = TextMark | PathMark | ImageMark
+/** Painting that is never matched to an object (shadings, Form XObjects): only relevant to keepOnly. */
+interface OtherMark {
+  kind: 'other'
+  op: number
+}
+type Mark = TextMark | PathMark | ImageMark | OtherMark
 
 // ---------------------------------------------------------------------------
 // font metrics (only needed to know where each text-show operator ends)
@@ -321,8 +326,12 @@ function interpret(ops: Op[], resources: PDFDict | undefined): Mark[] {
         const xo = xobjects?.lookup(PDFName.of(nm))
         const sub = xo instanceof PDFStream ? xo.dict.lookup(PDFName.of('Subtype'))?.toString() : undefined
         if (sub === '/Image') marks.push({ kind: 'image', op: idx, ctm: gs.ctm, bbox: unitBox(gs.ctm) })
+        else marks.push({ kind: 'other', op: idx })
         break
       }
+      case 'sh':
+        marks.push({ kind: 'other', op: idx })
+        break
       case 'BI':
         marks.push({ kind: 'image', op: idx, ctm: gs.ctm, bbox: unitBox(gs.ctm) })
         break
@@ -347,6 +356,8 @@ export type EditTarget =
   | { id: string; kind: 'line'; rect: UserRect; ends: [{ x: number; y: number }, { x: number; y: number }]; thickness: number }
   | { id: string; kind: 'rect'; rect: UserRect }
   | { id: string; kind: 'image'; rect: UserRect; moveTo?: UserRect }
+  /** Every vector path drawn entirely inside `rect` (a table's rules, borders and cell fills). */
+  | { id: string; kind: 'paths'; rect: UserRect }
 
 export interface EditResult {
   /** Target ids whose original content was removed (or transformed) in the content stream. */
@@ -356,6 +367,7 @@ export interface EditResult {
 const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol
 const sameRect = (a: UserRect, b: UserRect, tol: number) => near(a.x0, b.x0, tol) && near(a.y0, b.y0, tol) && near(a.x1, b.x1, tol) && near(a.y1, b.y1, tol)
 const inside = (p: { x: number; y: number }, r: UserRect, tol: number, tolX = tol) => p.x >= r.x0 - tolX && p.x <= r.x1 + tolX && p.y >= r.y0 - tol && p.y <= r.y1 + tol
+const rectInside = (a: UserRect, r: UserRect, tol: number) => a.x0 >= r.x0 - tol && a.y0 >= r.y0 - tol && a.x1 <= r.x1 + tol && a.y1 <= r.y1 + tol
 
 function contentBytes(page: PDFPage): Uint8Array | null {
   const contents = page.node.Contents()
@@ -378,6 +390,107 @@ function contentBytes(page: PDFPage): Uint8Array | null {
   return out
 }
 
+interface Match {
+  texts: TextMark[]
+  subs: { mark: PathMark; sub: SubPath }[]
+  image?: ImageMark
+}
+
+/** Finds the painted marks of one target, or null when that can't be done safely. */
+function matchTarget(t: EditTarget, marks: Mark[], claimedMarks: Set<Mark>, claimedSubs: Set<SubPath>): Match | null {
+  if (t.kind === 'text') {
+    const tol = 2
+    const hits: TextMark[] = []
+    for (const m of marks) {
+      if (m.kind !== 'text' || !m.show.trim()) continue
+      const ia = inside(m.a, t.rect, tol)
+      // our width estimate may be a few % off: allow that horizontally, never vertically
+      const ib = inside(m.b, t.rect, tol, Math.max(tol, Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) * 0.04))
+      if (ia && ib) hits.push(m)
+      else if (ia || ib || segmentCrosses(m.a, m.b, t.rect)) {
+        if (DEBUG_EDITS) console.log('partial', JSON.stringify({ show: m.show, a: m.a, b: m.b, rect: t.rect, ia, ib }))
+        return null // a text operator shared with content outside the object
+      }
+    }
+    if (!hits.length || hits.some((h) => claimedMarks.has(h))) return null
+    hits.forEach((h) => claimedMarks.add(h))
+    return { texts: hits, subs: [] }
+  }
+  if (t.kind === 'line' || t.kind === 'rect') {
+    for (const m of marks) {
+      if (m.kind !== 'path' || m.clip) continue
+      for (const sub of m.subpaths) {
+        if (claimedSubs.has(sub)) continue
+        const pts = sub.points
+        const ok =
+          t.kind === 'line'
+            ? pts.length >= 2 &&
+              ((near(pts[0].x, t.ends[0].x, 1.5) && near(pts[0].y, t.ends[0].y, 1.5) && near(pts[pts.length - 1].x, t.ends[1].x, 1.5) && near(pts[pts.length - 1].y, t.ends[1].y, 1.5)) ||
+                (near(pts[0].x, t.ends[1].x, 1.5) && near(pts[0].y, t.ends[1].y, 1.5) && near(pts[pts.length - 1].x, t.ends[0].x, 1.5) && near(pts[pts.length - 1].y, t.ends[0].y, 1.5)) ||
+                sameRect(sub.bbox, t.rect, Math.max(1.2, t.thickness)))
+            : sameRect(sub.bbox, t.rect, 1.5)
+        if (ok) {
+          claimedSubs.add(sub)
+          return { texts: [], subs: [{ mark: m, sub }] }
+        }
+      }
+    }
+    return null
+  }
+  if (t.kind === 'paths') {
+    const subs: Match['subs'] = []
+    for (const m of marks) {
+      if (m.kind !== 'path' || m.clip) continue
+      for (const sub of m.subpaths) if (!claimedSubs.has(sub) && rectInside(sub.bbox, t.rect, 2)) subs.push({ mark: m, sub })
+    }
+    subs.forEach((x) => claimedSubs.add(x.sub))
+    return { texts: [], subs }
+  }
+  const m = marks.find((x): x is ImageMark => x.kind === 'image' && !claimedMarks.has(x) && sameRect(x.bbox, t.rect, 1.5))
+  if (!m) return null
+  claimedMarks.add(m)
+  return { texts: [], subs: [], image: m }
+}
+
+/** Replacement for a text-show operator that paints nothing but keeps the text position. */
+function blankText(ops: Op[], h: TextMark): string | null {
+  const op = ops[h.op]
+  const scale = h.fontSize * h.hScale
+  const kern = scale ? `[${fmtNum((-h.advance * 1000) / scale)}] TJ` : ''
+  if (op.op === "'") return `T* ${kern}`
+  if (op.op === '"') return `${serializeOperand(op.args[0])} Tw ${serializeOperand(op.args[1])} Tc T* ${kern}`
+  return kern || null
+}
+
+/** Removes whole paths, or single sub-paths of a path that also draws other things. */
+function removeSubpaths(ops: Op[], repl: Replacements, marks: Mark[], drop: Set<SubPath>) {
+  void ops
+  for (const m of marks) {
+    if (m.kind !== 'path') continue
+    const gone = m.subpaths.filter((s) => drop.has(s))
+    if (!gone.length) continue
+    if (gone.length === m.subpaths.length) for (let k = m.start; k <= m.paint; k += 1) repl.set(k, null)
+    else for (const s of gone) for (let k = s.first; k <= s.last; k += 1) repl.set(k, null)
+  }
+}
+
+function writeContent(doc: PDFDocument, page: PDFPage, src: Uint8Array, ops: Op[], repl: Replacements) {
+  const rebuilt = rebuildContentStream(src, ops, repl)
+  page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.flateStream(rebuilt)) as PDFRef)
+}
+
+function parsePage(page: PDFPage) {
+  let src: Uint8Array | null = null
+  try {
+    src = contentBytes(page)
+  } catch {
+    return null
+  }
+  if (!src) return null
+  const ops = parseContentStream(src)
+  return { src, ops, marks: interpret(ops, page.node.Resources()) }
+}
+
 /**
  * Removes (or, for images, moves) the content painting each target. Must be called before
  * anything else is drawn on the page. Targets that cannot be handled safely are left alone.
@@ -385,75 +498,21 @@ function contentBytes(page: PDFPage): Uint8Array | null {
 export function editPageContent(doc: PDFDocument, page: PDFPage, targets: EditTarget[]): EditResult {
   const done = new Set<string>()
   if (!targets.length) return { done }
-  let src: Uint8Array | null = null
-  try {
-    src = contentBytes(page)
-  } catch {
-    return { done }
-  }
-  if (!src) return { done }
-  const ops = parseContentStream(src)
-  const marks = interpret(ops, page.node.Resources())
+  const parsed = parsePage(page)
+  if (!parsed) return { done }
+  const { src, ops, marks } = parsed
   const repl: Replacements = new Map()
-  const claimed = new Set<Mark>()
+  const claimedMarks = new Set<Mark>()
+  const claimedSubs = new Set<SubPath>()
+  const dropSubs = new Set<SubPath>()
 
   for (const t of targets) {
-    if (t.kind === 'text') {
-      const tol = 2
-      const hits: TextMark[] = []
-      let partial = false
-      for (const m of marks) {
-        if (m.kind !== 'text' || !m.show.trim()) continue
-        const ia = inside(m.a, t.rect, tol)
-        // our width estimate may be a few % off: allow that horizontally, never vertically
-        const ib = inside(m.b, t.rect, tol, Math.max(tol, Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) * 0.04))
-        if (ia && ib) hits.push(m)
-        else if (ia || ib || segmentCrosses(m.a, m.b, t.rect)) {
-          partial = true
-          if (DEBUG_EDITS) console.log('partial', JSON.stringify({ show: m.show, a: m.a, b: m.b, rect: t.rect, ia, ib }))
-        }
-      }
-      if (partial || !hits.length || hits.some((h) => claimed.has(h))) continue
-      for (const h of hits) {
-        claimed.add(h)
-        const op = ops[h.op]
-        const scale = h.fontSize * h.hScale
-        const kern = scale ? `[${fmtNum((-h.advance * 1000) / scale)}] TJ` : ''
-        // keep the text position for anything drawn after it on the same line
-        if (op.op === "'") repl.set(h.op, `T* ${kern}`)
-        else if (op.op === '"') repl.set(h.op, `${serializeOperand(op.args[0])} Tw ${serializeOperand(op.args[1])} Tc T* ${kern}`)
-        else repl.set(h.op, kern || null)
-      }
-      done.add(t.id)
-    } else if (t.kind === 'line' || t.kind === 'rect') {
-      let found: { mark: PathMark; sub: SubPath } | null = null
-      for (const m of marks) {
-        if (m.kind !== 'path' || m.clip) continue
-        for (const s of m.subpaths) {
-          const ok =
-            t.kind === 'line'
-              ? s.points.length >= 2 && ((near(s.points[0].x, t.ends[0].x, 1.5) && near(s.points[0].y, t.ends[0].y, 1.5) && near(s.points[s.points.length - 1].x, t.ends[1].x, 1.5) && near(s.points[s.points.length - 1].y, t.ends[1].y, 1.5)) ||
-                  (near(s.points[0].x, t.ends[1].x, 1.5) && near(s.points[0].y, t.ends[1].y, 1.5) && near(s.points[s.points.length - 1].x, t.ends[0].x, 1.5) && near(s.points[s.points.length - 1].y, t.ends[0].y, 1.5)) ||
-                  sameRect(s.bbox, t.rect, Math.max(1.2, t.thickness)))
-              : sameRect(s.bbox, t.rect, 1.5)
-          if (ok) {
-            found = { mark: m, sub: s }
-            break
-          }
-        }
-        if (found) break
-      }
-      if (!found) continue
-      const { mark, sub } = found
-      if (mark.subpaths.length === 1) for (let k = mark.start; k <= mark.paint; k += 1) repl.set(k, null)
-      else for (let k = sub.first; k <= sub.last; k += 1) repl.set(k, null)
-      done.add(t.id)
-    } else if (t.kind === 'image') {
-      const m = marks.find((x): x is ImageMark => x.kind === 'image' && !claimed.has(x) && sameRect(x.bbox, t.rect, 1.5))
-      if (!m) continue
-      claimed.add(m)
-      const op = ops[m.op]
-      if (!t.moveTo) repl.set(m.op, null)
+    const m = matchTarget(t, marks, claimedMarks, claimedSubs)
+    if (!m) continue
+    for (const h of m.texts) repl.set(h.op, blankText(ops, h))
+    for (const x of m.subs) dropSubs.add(x.sub)
+    if (m.image && t.kind === 'image') {
+      if (!t.moveTo) repl.set(m.image.op, null)
       else {
         // T maps the old box onto the new one (user space); new CTM = T applied after the old one.
         const r = t.rect
@@ -461,18 +520,55 @@ export function editPageContent(doc: PDFDocument, page: PDFPage, targets: EditTa
         const sx = (n.x1 - n.x0) / (r.x1 - r.x0 || 1)
         const sy = (n.y1 - n.y0) / (r.y1 - r.y0 || 1)
         const T: M = [sx, 0, 0, sy, n.x0 - r.x0 * sx, n.y0 - r.y0 * sy]
-        const Mcm = mul(mul(m.ctm, T), invert(m.ctm))
-        void op
-        repl.set(m.op, { wrap: [`q ${Mcm.map(fmtNum).join(' ')} cm`, 'Q'] })
+        const Mcm = mul(mul(m.image.ctm, T), invert(m.image.ctm))
+        repl.set(m.image.op, { wrap: [`q ${Mcm.map(fmtNum).join(' ')} cm`, 'Q'] })
       }
-      done.add(t.id)
     }
+    done.add(t.id)
   }
-  if (!repl.size) return { done }
-  const rebuilt = rebuildContentStream(src, ops, repl)
-  const stream = doc.context.flateStream(rebuilt)
-  page.node.set(PDFName.of('Contents'), doc.context.register(stream) as PDFRef)
+  removeSubpaths(ops, repl, marks, dropSubs)
+  if (repl.size) writeContent(doc, page, src, ops, repl)
   return { done }
+}
+
+/**
+ * The opposite of editPageContent: removes everything the page paints *except* the targets
+ * (used to cut copied / moved objects out of a page so they can be stamped elsewhere as vector
+ * content). Returns the ids of targets that were kept; the others are not on the page any more.
+ */
+export function keepOnly(doc: PDFDocument, page: PDFPage, targets: EditTarget[]): EditResult {
+  const done = new Set<string>()
+  const parsed = parsePage(page)
+  if (!parsed) return { done }
+  const { src, ops, marks } = parsed
+  const claimedMarks = new Set<Mark>()
+  const claimedSubs = new Set<SubPath>()
+  for (const t of targets) if (matchTarget(t, marks, claimedMarks, claimedSubs)) done.add(t.id)
+  const repl: Replacements = new Map()
+  const dropSubs = new Set<SubPath>()
+  for (const m of marks) {
+    if (m.kind === 'text' && !claimedMarks.has(m)) repl.set(m.op, blankText(ops, m))
+    else if (m.kind === 'image' && !claimedMarks.has(m)) repl.set(m.op, null)
+    else if (m.kind === 'other') repl.set(m.op, null)
+    else if (m.kind === 'path' && !m.clip) for (const s of m.subpaths) if (!claimedSubs.has(s)) dropSubs.add(s)
+  }
+  removeSubpaths(ops, repl, marks, dropSubs)
+  writeContent(doc, page, src, ops, repl)
+  pruneXObjects(doc, page, ops.filter((_, k) => !repl.has(k)))
+  return { done }
+}
+
+/** Drops image / form resources no longer drawn, so a cut-out fragment doesn't drag big images along. */
+function pruneXObjects(doc: PDFDocument, page: PDFPage, kept: Op[]) {
+  const res = page.node.Resources()
+  const xo = res?.lookupMaybe(PDFName.of('XObject'), PDFDict)
+  if (!res || !xo) return
+  const used = new Set(kept.filter((o) => o.op === 'Do' && o.args[0]?.t === 'name').map((o) => (o.args[0] as { v: string }).v))
+  const slim = doc.context.obj({}) as PDFDict
+  for (const [k, v] of xo.entries()) if (used.has(k.decodeText())) slim.set(k, v)
+  const copy = res.clone(doc.context)
+  copy.set(PDFName.of('XObject'), slim)
+  page.node.set(PDFName.of('Resources'), copy)
 }
 
 function fmtNum(v: number) {

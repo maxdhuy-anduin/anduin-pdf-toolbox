@@ -3,7 +3,6 @@ import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { AppContext, type AppCtx, type ObjectSelection, type Tool, type ToastKind, type ZoomState } from './context'
 import { EmptyState } from './components/EmptyState'
 import { Header } from './components/Header'
-import { ObjectTreePanel } from './components/ObjectTreePanel'
 import { InsertDialog, type InsertRequest } from './components/InsertDialog'
 import { PropertiesPanel } from './components/PropertiesPanel'
 import { StatusBar } from './components/StatusBar'
@@ -29,7 +28,7 @@ const isTyping = (t: EventTarget | null) => {
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
 }
 
-/** View toggles: `?debug` / `?boxes` / `?tree` in the URL, else remembered per browser (convenience only). */
+/** View toggles: `?debug` / `?boxes` in the URL, else remembered per browser (convenience only). */
 function readFlag(name: string): boolean {
   try {
     return new URLSearchParams(window.location.search).has(name) || localStorage.getItem(`toolbox.${name}`) === '1'
@@ -62,8 +61,6 @@ export default function App() {
   const [editRequest, setEditRequest] = useState<AppCtx['editRequest']>(null)
   const [debug, setDebug] = useState(() => readFlag('debug'))
   const [showBoxes, setShowBoxesRaw] = useState(() => readFlag('boxes'))
-  const [showTree, setShowTreeRaw] = useState(() => readFlag('tree'))
-  const [treeFocus, setTreeFocus] = useState<AppCtx['treeFocus']>(null)
   const [layoutProvider, setLayoutProviderRaw] = useState<ProviderId>('local')
   const selectedObjectRef = useRef(selectedObject)
   selectedObjectRef.current = selectedObject
@@ -110,11 +107,6 @@ export default function App() {
   const setShowBoxes = useCallback((v: boolean) => {
     setShowBoxesRaw(v)
     writeFlag('boxes', v)
-  }, [])
-  const setShowTree = useCallback((v: boolean) => {
-    setShowTreeRaw(v)
-    writeFlag('tree', v)
-    if (!v) setTreeFocus(null)
   }, [])
   const showBoxesRef = useRef(showBoxes)
   showBoxesRef.current = showBoxes
@@ -310,7 +302,7 @@ export default function App() {
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.selection.length) {
         e.preventDefault()
         deleteTargets()
-      } else if (e.key.startsWith('Arrow') && overlay && page) {
+      } else if (e.key.startsWith('Arrow') && overlay && page && (isText(overlay) || isGraphic(overlay))) {
         e.preventDefault()
         const step = e.shiftKey ? 10 : 1
         const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as [number, number]
@@ -393,7 +385,7 @@ export default function App() {
   const ctx: AppCtx = {
     state, dispatch, tool, setTool, zoom, setZoom, scale, setScale, currentIndex, setCurrentIndex, scrollToPage, scrollRequest, toast,
     selectedObject, setSelectedObject, editRequest, requestEdit, debug, setDebug: toggleDebug,
-    showBoxes, setShowBoxes, showTree, setShowTree, treeFocus, setTreeFocus, layoutProvider, setLayoutProvider,
+    showBoxes, setShowBoxes, layoutProvider, setLayoutProvider,
   }
 
   const curSource = state.pages[currentIndex] ? state.sources[state.pages[currentIndex].sourceId] : undefined
@@ -440,7 +432,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-              {showTree && <ObjectTreePanel />}
               <PropertiesPanel />
             </div>
           </>

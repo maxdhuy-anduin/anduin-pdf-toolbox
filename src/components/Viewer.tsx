@@ -52,7 +52,7 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
   const holderRef = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [renderedHidden, setRenderedHidden] = useState<Set<number>>(() => new Set())
-  const { tool, showBoxes, debug, treeFocus } = useApp()
+  const { tool, showBoxes, debug } = useApp()
   const edited = useMemo(() => new Set(page.overlays.flatMap((o) => (o.source ? [o.source.objectId] : []))), [page.overlays])
   // Operators whose content has been replaced by an edit: skipped when rendering (exact hiding).
   const hiddenKey = useMemo(
@@ -130,7 +130,7 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
         />
         {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
         <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
-        {(showBoxes || debug || treeFocus?.pageId === page.id) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
+        {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
       </div>
     </Rotated>
   )

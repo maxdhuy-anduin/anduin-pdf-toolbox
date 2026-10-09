@@ -9,6 +9,14 @@
 import type { PDFPageProxy } from 'pdfjs-dist'
 import type { Box, RawImage, RawPage, RawPath, RawText } from './types'
 
+/** PDF.js operator names that put ink on the page. */
+const PAINT_OPS = new Set([
+  'showText', 'showSpacedText', 'nextLineShowText', 'nextLineSetSpacingShowText',
+  'stroke', 'closeStroke', 'fill', 'eoFill', 'fillStroke', 'eoFillStroke', 'closeFillStroke', 'closeEOFillStroke',
+  'shadingFill', 'paintImageXObject', 'paintInlineImageXObject', 'paintImageMaskXObject', 'paintSolidColorImageMask',
+  'paintImageXObjectRepeat', 'paintImageMaskXObjectGroup', 'paintImageMaskXObjectRepeat', 'paintInlineImageXObjectGroup',
+])
+
 export interface PdfjsLib {
   OPS: Record<string, number>
   Util: { transform: (a: number[], b: number[]) => number[] }
@@ -160,9 +168,11 @@ export async function extractPage(page: PDFPageProxy, lib: PdfjsLib): Promise<Ra
   }
 
   const { fnArray, argsArray } = opList
+  const paintOps: number[] = []
   for (let i = 0; i < fnArray.length; i += 1) {
     const fn = name[fnArray[i]]
     const a = (argsArray[i] ?? []) as unknown[]
+    if (PAINT_OPS.has(fn) || (fn === 'constructPath' && name[a[0] as number] !== 'endPath')) paintOps.push(i)
     switch (fn) {
       case 'save':
       case 'beginGroup':
@@ -396,7 +406,7 @@ export async function extractPage(page: PDFPageProxy, lib: PdfjsLib): Promise<Ra
     })
   }
 
-  return { width: vp.width, height: vp.height, texts, paths, images, fonts }
+  return { width: vp.width, height: vp.height, texts, paths, images, fonts, paintOps }
 }
 
 /** Recognises an axis-aligned rectangle subpath (4 corners, optionally closed). */

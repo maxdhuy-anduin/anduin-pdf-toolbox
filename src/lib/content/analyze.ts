@@ -528,6 +528,19 @@ export function analyzePage(raw: RawPage): PageContent {
       o.zIndex = o.ops[0] ?? 0
     }
   }
+  // a table owns every vector path drawn entirely inside it (rules, borders, cell fills), so it can
+  // be moved / deleted / copied as one unit
+  for (const t of tables) {
+    const tb = objects[t].bounds
+    const ops = new Set<number>()
+    for (const p of raw.paths) {
+      const tol = Math.max(2, p.lineWidth)
+      const b = p.bbox
+      if (b.x >= tb.x - tol && b.y >= tb.y - tol && b.x + b.w <= tb.x + tb.w + tol && b.y + b.h <= tb.y + tb.h + tol) ops.add(p.op)
+    }
+    objects[t].ops = [...ops].sort((x, y) => x - y)
+    objects[t].opsExclusive = true
+  }
   for (const t of tables) objects[t].zIndex = Math.min(...objects[t].children.flatMap((r) => objects[r].children.map((c) => objects[c].zIndex)), objects[t].ops[0] ?? Infinity)
 
   // ---- roots, hit order, page kind ---------------------------------------------------------
@@ -548,6 +561,7 @@ export function analyzePage(raw: RawPage): PageContent {
     objects,
     roots,
     hitOrder,
+    paintOps: raw.paintOps ?? [...new Set([...raw.texts.flatMap((t) => t.ops), ...raw.paths.map((p) => p.op), ...raw.images.map((i) => i.op)])].sort((x, y) => x - y),
     stats: { items: items.length, lines: lines.length, blocks: blockIds.length, tables: tables.length, rules: ruleIds.length, rects: rectIds.length, images: imageIds.length, ms: Math.round((t1 - t0) * 10) / 10 },
   }
 

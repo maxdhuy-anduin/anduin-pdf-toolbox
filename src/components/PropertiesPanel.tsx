@@ -2,7 +2,7 @@ import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronRight, I
 import { useApp } from '../context'
 import { CHUNK_COLORS, CHUNK_LEGEND } from './LayoutLayer'
 import { unsupportedChars } from '../lib/fonts'
-import { FONT_LABELS, isGraphic, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
+import { FONT_LABELS, isGraphic, isText, type FontFamily, type GraphicOverlay, type OverlayPatch, type TextOverlay } from '../lib/model'
 import { getCachedContent } from '../lib/content/cache'
 import { describeObject, isGraphicObject, isTextObject, OBJECT_LABEL } from '../lib/content/edits'
 import type { ContentObject, PageContent } from '../lib/content/types'
@@ -49,7 +49,7 @@ export function PropertiesPanel() {
   if (overlay && page && isGraphic(overlay)) {
     title = OBJECT_LABEL[overlay.source.objType] ?? 'Graphic'
     body = <GraphicProps overlay={overlay} pageId={page.id} />
-  } else if (overlay && page && !isGraphic(overlay)) {
+  } else if (overlay && page && isText(overlay)) {
     title = overlay.source ? 'Edited text' : 'Text box'
     body = <TextProps overlay={overlay} pageId={page.id} isDraft={isDraft} />
   } else if (obj && objContent && objPage) {

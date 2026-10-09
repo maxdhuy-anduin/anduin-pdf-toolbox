@@ -101,6 +101,8 @@ export interface PageContent {
   roots: string[]
   /** Objects that can be hovered/selected, smallest first (hit-testing order). */
   hitOrder: string[]
+  /** Operator-list indices of every painting operator on the page (used to render one object alone). */
+  paintOps: number[]
   stats: { items: number; lines: number; blocks: number; tables: number; rules: number; rects: number; images: number; ms: number }
 }
 
@@ -159,4 +161,6 @@ export interface RawPage {
   texts: RawText[]
   paths: RawPath[]
   images: RawImage[]
+  /** Operator-list indices of every operator that paints (text, paths, images, shadings). */
+  paintOps?: number[]
 }

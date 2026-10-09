@@ -79,6 +79,8 @@ export interface SourceRef {
   bounds: { x: number; y: number; w: number; h: number }
   /** Operator-list indices that paint the original object. */
   ops: number[]
+  /** Line geometry (view space), for rules. */
+  line?: { x1: number; y1: number; x2: number; y2: number; thickness: number }
   /** True when those operators paint nothing else, so the original can be hidden exactly. */
   exclusive: boolean
 }
@@ -102,9 +104,53 @@ export interface GraphicOverlay {
   coverColor: string
 }
 
-export type Overlay = TextOverlay | GraphicOverlay
+/**
+ * A detected object moved rigidly (or deleted) *as it is*: its original painting operators are
+ * hidden/removed and drawn again, unchanged, at the new position. Fonts, line breaks and spacing
+ * stay exactly as in the PDF. Used for text blocks, cells, tables, lines, rectangles and images.
+ */
+export interface MoveOverlay {
+  id: string
+  type: 'move'
+  source: SourceRef
+  /** Translation in view space. */
+  dx: number
+  dy: number
+  deleted: boolean
+  /** Background colour used to hide the original if its operators can't be removed on export. */
+  coverColor: string
+}
+
+/**
+ * Content copied from a PDF page (this document or another one) and pasted here. `sourceId` /
+ * `srcIndex` name the page the content comes from; only the operators of `items` are drawn,
+ * translated by (dx, dy) in view space.
+ */
+export interface PasteOverlay {
+  id: string
+  type: 'paste'
+  sourceId: string
+  srcIndex: number
+  items: SourceRef[]
+  dx: number
+  dy: number
+  source?: undefined
+}
+
+export type Overlay = TextOverlay | GraphicOverlay | MoveOverlay | PasteOverlay
 export const isText = (o: Overlay): o is TextOverlay => o.type === 'text'
 export const isGraphic = (o: Overlay): o is GraphicOverlay => o.type === 'graphic'
+export const isMove = (o: Overlay): o is MoveOverlay => o.type === 'move'
+export const isPaste = (o: Overlay): o is PasteOverlay => o.type === 'paste'
+
+/** Union of item bounds of a pasted block, at its pasted position. */
+export function pasteBounds(o: PasteOverlay) {
+  const x0 = Math.min(...o.items.map((i) => i.bounds.x))
+  const y0 = Math.min(...o.items.map((i) => i.bounds.y))
+  const x1 = Math.max(...o.items.map((i) => i.bounds.x + i.bounds.w))
+  const y1 = Math.max(...o.items.map((i) => i.bounds.y + i.bounds.h))
+  return { x: x0 + o.dx, y: y0 + o.dy, w: x1 - x0, h: y1 - y0 }
+}
 
 export interface PageModel {
   id: string
@@ -171,7 +217,7 @@ export function deletePages(pages: PageModel[], ids: string[]): PageModel[] {
 
 /** Deep-copies a page (new ids for the page and its overlays). */
 export function clonePage(p: PageModel): PageModel {
-  return { ...p, id: uid('pg'), overlays: p.overlays.map((o) => structuredClone({ ...o, id: uid(o.type === 'text' ? 'tx' : 'gr') })) }
+  return { ...p, id: uid('pg'), overlays: p.overlays.map((o) => structuredClone({ ...o, id: uid(o.type === 'text' ? 'tx' : o.type === 'graphic' ? 'gr' : o.type) })) }
 }
 
 /** Places a copy of each selected page directly after the last selected page of its run. */
@@ -271,6 +317,8 @@ export type Action =
   | { type: 'addOverlay'; pageId: string; overlay: Overlay }
   | { type: 'updateOverlay'; pageId: string; overlayId: string; patch: OverlayPatch; coalesce?: string }
   | { type: 'removeOverlay'; pageId: string; overlayId: string }
+  /** Several overlay changes on one page as a single undo step (group move / delete / paste). */
+  | { type: 'editOverlays'; pageId: string; add?: Overlay[]; update?: { id: string; patch: OverlayPatch }[]; remove?: string[] }
   | { type: 'startDraft'; pageId: string; overlay: TextOverlay; original: string | null }
   | { type: 'discardDraft' }
   | { type: 'setSelection'; ids: string[] }
@@ -279,7 +327,10 @@ export type Action =
   | { type: 'redo' }
   | { type: 'markSaved' }
 
-export type OverlayPatch = Partial<Omit<TextOverlay, 'type' | 'id'>> & Partial<Omit<GraphicOverlay, 'type' | 'id'>>
+export type OverlayPatch = Partial<Omit<TextOverlay, 'type' | 'id'>> &
+  Partial<Omit<GraphicOverlay, 'type' | 'id'>> &
+  Partial<Omit<MoveOverlay, 'type' | 'id'>> &
+  Partial<Omit<PasteOverlay, 'type' | 'id' | 'source'>>
 
 const MAX_HISTORY = 100
 const COALESCE_MS = 1200
@@ -376,6 +427,23 @@ export function reducer(state: DocState, action: Action): DocState {
         p.id === action.pageId ? { ...p, overlays: p.overlays.filter((o) => o.id !== action.overlayId) } : p,
       )
       return commit(state, pages, { selectedOverlay: null })
+    }
+    case 'editOverlays': {
+      const drop = new Set(action.remove ?? [])
+      const patches = new Map((action.update ?? []).map((u) => [u.id, u.patch]))
+      if (!drop.size && !patches.size && !action.add?.length) return state
+      const pages = state.pages.map((p) =>
+        p.id === action.pageId
+          ? {
+              ...p,
+              overlays: [
+                ...p.overlays.filter((o) => !drop.has(o.id)).map((o) => (patches.has(o.id) ? ({ ...o, ...patches.get(o.id) } as Overlay) : o)),
+                ...(action.add ?? []),
+              ],
+            }
+          : p,
+      )
+      return commit(state, pages, { selectedOverlay: overlayStillExists(pages, state.selectedOverlay) })
     }
     case 'startDraft':
       return { ...state, draft: { pageId: action.pageId, overlay: action.overlay, original: action.original }, selectedOverlay: { pageId: action.pageId, overlayId: action.overlay.id } }

@@ -1,7 +1,7 @@
 // Turning a detected content object into an editable overlay (and back into PDF on export).
 import { BASELINE_RATIO } from '../coords'
 import { sampleColors } from '../geom'
-import { makeTextOverlay, uid, type GraphicOverlay, type SourceRef, type TextOverlay } from '../model'
+import { makeTextOverlay, uid, type GraphicOverlay, type MoveOverlay, type SourceRef, type TextOverlay } from '../model'
 import type { Box, ContentObject, PageContent } from './types'
 
 export const sourceRef = (o: ContentObject): SourceRef => ({
@@ -9,8 +9,15 @@ export const sourceRef = (o: ContentObject): SourceRef => ({
   objType: o.type,
   bounds: { ...o.bounds },
   ops: o.ops,
-  exclusive: o.opsExclusive && o.ops.length > 0,
+  // a table owns no text itself (its cells do): it is exclusive even when it has no rules
+  exclusive: o.opsExclusive && (o.ops.length > 0 || o.type === 'TABLE'),
+  ...(o.type === 'LINE' && o.x1 !== undefined ? { line: { x1: o.x1, y1: o.y1!, x2: o.x2!, y2: o.y2!, thickness: o.thickness ?? 1 } } : {}),
 })
+
+/** Rigid move (or delete) of an object as drawn in the PDF; see MoveOverlay. */
+export function moveOverlayFor(o: ContentObject, d: { dx?: number; dy?: number; deleted?: boolean; coverColor?: string } = {}): MoveOverlay {
+  return { id: uid('mv'), type: 'move', source: sourceRef(o), dx: d.dx ?? 0, dy: d.dy ?? 0, deleted: !!d.deleted, coverColor: d.coverColor ?? '#ffffff' }
+}
 
 /** Samples background/foreground colours of a view-space box from the rendered page canvas. */
 export function sampleBox(canvas: HTMLCanvasElement | null | undefined, pageWidth: number, b: Box) {
