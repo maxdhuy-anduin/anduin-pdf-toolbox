@@ -107,15 +107,22 @@ function metricsFor(fontDict: PDFDict | undefined): Metrics {
     const widths = new Map<number, number>()
     const w = desc?.lookup(PDFName.of('W'))
     if (w instanceof PDFArray) {
+      // [first [w1 w2 …]] or [first last w]; stop at anything malformed (missing glyphs use DW)
+      const n = (x: unknown) => (x instanceof PDFNumber ? x.asNumber() : null)
       for (let k = 0; k < w.size(); ) {
-        const first = (w.lookup(k) as PDFNumber).asNumber()
+        const first = n(w.lookup(k))
         const next = w.lookup(k + 1)
+        if (first === null) break
         if (next instanceof PDFArray) {
-          for (let j = 0; j < next.size(); j += 1) widths.set(first + j, (next.lookup(j) as PDFNumber).asNumber())
+          for (let j = 0; j < next.size(); j += 1) {
+            const v = n(next.lookup(j))
+            if (v !== null) widths.set(first + j, v)
+          }
           k += 2
         } else {
-          const last = (next as PDFNumber).asNumber()
-          const val = (w.lookup(k + 2) as PDFNumber).asNumber()
+          const last = n(next)
+          const val = k + 2 < w.size() ? n(w.lookup(k + 2)) : null
+          if (last === null || val === null) break
           for (let c = first; c <= last && c - first < 65536; c += 1) widths.set(c, val)
           k += 3
         }
@@ -156,7 +163,11 @@ function interpret(ops: Op[], resources: PDFDict | undefined): Mark[] {
   const metrics = (name: string) => {
     let m = metricsCache.get(name)
     if (!m) {
-      m = metricsFor(fonts?.lookupMaybe(PDFName.of(name), PDFDict))
+      try {
+        m = metricsFor(fonts?.lookupMaybe(PDFName.of(name), PDFDict))
+      } catch {
+        m = { twoByte: false, width: () => 500 } // damaged font dictionary: approximate widths
+      }
       metricsCache.set(name, m)
     }
     return m
@@ -352,7 +363,8 @@ function unitBox(m: M): UserRect {
 // ---------------------------------------------------------------------------
 
 export type EditTarget =
-  | { id: string; kind: 'text'; rect: UserRect }
+  /** `exclude`: other objects' text inside `rect`, left untouched. */
+  | { id: string; kind: 'text'; rect: UserRect; exclude?: UserRect[] }
   | { id: string; kind: 'line'; rect: UserRect; ends: [{ x: number; y: number }, { x: number; y: number }]; thickness: number }
   | { id: string; kind: 'rect'; rect: UserRect }
   | { id: string; kind: 'image'; rect: UserRect; moveTo?: UserRect }
@@ -403,6 +415,7 @@ function matchTarget(t: EditTarget, marks: Mark[], claimedMarks: Set<Mark>, clai
     const hits: TextMark[] = []
     for (const m of marks) {
       if (m.kind !== 'text' || !m.show.trim()) continue
+      if (t.exclude?.some((r) => inside(m.a, r, 1) && inside(m.b, r, 1))) continue // not this object's text
       const ia = inside(m.a, t.rect, tol)
       // our width estimate may be a few % off: allow that horizontally, never vertically
       const ib = inside(m.b, t.rect, tol, Math.max(tol, Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) * 0.04))
@@ -506,7 +519,7 @@ export function editPageContent(doc: PDFDocument, page: PDFPage, targets: EditTa
   const claimedSubs = new Set<SubPath>()
   const dropSubs = new Set<SubPath>()
 
-  for (const t of targets) {
+  for (const t of byClaimOrder(targets)) {
     const m = matchTarget(t, marks, claimedMarks, claimedSubs)
     if (!m) continue
     for (const h of m.texts) repl.set(h.op, blankText(ops, h))
@@ -532,25 +545,49 @@ export function editPageContent(doc: PDFDocument, page: PDFPage, targets: EditTa
 }
 
 /**
+ * A table's 'paths' target takes every path inside it, so specific targets (a rule or box inside the
+ * table that is edited on its own) must claim their geometry first.
+ */
+const byClaimOrder = (ts: EditTarget[]) => [...ts.filter((t) => t.kind !== 'paths'), ...ts.filter((t) => t.kind === 'paths')]
+
+/**
  * The opposite of editPageContent: removes everything the page paints *except* the targets
  * (used to cut copied / moved objects out of a page so they can be stamped elsewhere as vector
- * content). Returns the ids of targets that were kept; the others are not on the page any more.
+ * content). `avoid`: other edited objects of the page, never kept even if inside a target (a rule
+ * moved on its own inside a moved table). Returns the ids of targets that were kept.
  */
-export function keepOnly(doc: PDFDocument, page: PDFPage, targets: EditTarget[]): EditResult {
+export function keepOnly(doc: PDFDocument, page: PDFPage, targets: EditTarget[], avoid: EditTarget[] = []): EditResult {
   const done = new Set<string>()
   const parsed = parsePage(page)
   if (!parsed) return { done }
   const { src, ops, marks } = parsed
+  // one claiming pass in byClaimOrder over both lists, so a rule claims its own path before any
+  // table (kept or avoided) can take it; what an avoided target claims is not kept
+  const ids = new Set(targets.map((t) => t.id))
+  const avoided = new Set(avoid.filter((a) => !ids.has(a.id)))
   const claimedMarks = new Set<Mark>()
   const claimedSubs = new Set<SubPath>()
-  for (const t of targets) if (matchTarget(t, marks, claimedMarks, claimedSubs)) done.add(t.id)
+  const avoidMarks = new Set<Mark>()
+  const avoidSubs = new Set<SubPath>()
+  for (const t of byClaimOrder([...targets, ...avoided])) {
+    const m = matchTarget(t, marks, claimedMarks, claimedSubs)
+    if (!m) continue
+    if (!avoided.has(t)) done.add(t.id)
+    else {
+      m.texts.forEach((x) => avoidMarks.add(x))
+      if (m.image) avoidMarks.add(m.image)
+      m.subs.forEach((x) => avoidSubs.add(x.sub))
+    }
+  }
+  const keepMark = (m: Mark) => claimedMarks.has(m) && !avoidMarks.has(m)
+  const keepSub = (s: SubPath) => claimedSubs.has(s) && !avoidSubs.has(s)
   const repl: Replacements = new Map()
   const dropSubs = new Set<SubPath>()
   for (const m of marks) {
-    if (m.kind === 'text' && !claimedMarks.has(m)) repl.set(m.op, blankText(ops, m))
-    else if (m.kind === 'image' && !claimedMarks.has(m)) repl.set(m.op, null)
+    if (m.kind === 'text' && !keepMark(m)) repl.set(m.op, blankText(ops, m))
+    else if (m.kind === 'image' && !keepMark(m)) repl.set(m.op, null)
     else if (m.kind === 'other') repl.set(m.op, null)
-    else if (m.kind === 'path' && !m.clip) for (const s of m.subpaths) if (!claimedSubs.has(s)) dropSubs.add(s)
+    else if (m.kind === 'path' && !m.clip) for (const s of m.subpaths) if (!keepSub(s)) dropSubs.add(s)
   }
   removeSubpaths(ops, repl, marks, dropSubs)
   writeContent(doc, page, src, ops, repl)

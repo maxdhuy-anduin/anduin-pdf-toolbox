@@ -37,7 +37,10 @@ export function InsertDialog({ initialFiles, pageCount, currentIndex, onClose, o
   const itemsRef = useRef<Item[]>([])
   itemsRef.current = items
 
+  const closed = useRef(false)
   const addMeta = useCallback((source: SourceMeta) => {
+    // finished loading after the dialog was cancelled or confirmed: nobody will use it
+    if (closed.current) return releaseSource(source.id)
     setItems((prev) => [...prev, { source, selected: new Set(Array.from({ length: source.numPages }, (_, i) => i)) }])
   }, [])
 
@@ -65,6 +68,8 @@ export function InsertDialog({ initialFiles, pageCount, currentIndex, onClose, o
     setLoading((n) => n + 1)
     try {
       addMeta(await openPdfBytes(SAMPLE_SUPPLEMENT_NAME, await createSampleSupplement()))
+    } catch (err) {
+      setErrors((e) => [...e, `${SAMPLE_SUPPLEMENT_NAME}: ${err instanceof PdfError ? err.message : 'could not be opened.'}`])
     } finally {
       setLoading((n) => n - 1)
     }
@@ -79,12 +84,13 @@ export function InsertDialog({ initialFiles, pageCount, currentIndex, onClose, o
   }, [])
 
   // anything that was opened but not inserted must be released
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    closed.current = false // (re)mounted: React's StrictMode runs this effect twice in development
+    return () => {
+      closed.current = true
       if (!committed.current) itemsRef.current.forEach((i) => releaseSource(i.source.id))
-    },
-    [],
-  )
+    }
+  }, [])
 
   const toggle = (sid: string, idx: number) =>
     setItems((prev) =>

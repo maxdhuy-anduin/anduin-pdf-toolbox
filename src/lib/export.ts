@@ -1,4 +1,4 @@
-import { LineCapStyle, PDFDocument, StandardFonts, concatTransformationMatrix, degrees, drawObject, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { LineCapStyle, PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, StandardFonts, concatTransformationMatrix, degrees, drawObject, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { BASELINE_RATIO, canvasToPdf, pdfToCanvas, viewRectToUser, viewToUser } from './coords'
 import { editPageContent, keepOnly, type EditTarget, type UserRect } from './pdf/pageEdit'
 import { LINE_HEIGHT, OPEN_SHAPES, isGraphic, isLine, isMove, isPaste, isShape, isText, type FontFamily, type PageInfo, type PageModel, type SourceMeta, type SourceRef, type TextOverlay } from './model'
@@ -72,12 +72,19 @@ export function wrapLines(text: string, width: number, wrap: boolean, measure: (
 
 const TEXT_TYPES = new Set(['TEXT_BLOCK', 'TABLE_CELL', 'TEXT_LINE'])
 
+function foreignRects(src: SourceRef, info: PageInfo): UserRect[] | undefined {
+  return src.foreign?.map((f) => {
+    const r = viewRectToUser(info, f.x, f.y, f.w, f.h)
+    return { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h }
+  })
+}
+
 /** Content-stream target for a detected object (view-space bounds → user space). */
 export function targetForSource(id: string, src: SourceRef, info: PageInfo, moveTo?: { dx: number; dy: number }): EditTarget | null {
   const b = src.bounds
   const r = viewRectToUser(info, b.x, b.y, b.w, b.h)
   const rect: UserRect = { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h }
-  if (TEXT_TYPES.has(src.objType)) return { id, kind: 'text', rect }
+  if (TEXT_TYPES.has(src.objType)) return { id, kind: 'text', rect, exclude: foreignRects(src, info) }
   if (src.objType === 'TABLE') return { id, kind: 'paths', rect }
   if (src.objType === 'RECTANGLE') return { id, kind: 'rect', rect }
   if (src.objType === 'LINE') {
@@ -106,6 +113,29 @@ function placementMatrix(from: PageInfo, to: PageInfo, dx: number, dy: number): 
   return [ex.x - o.x, ex.y - o.y, ey.x - o.x, ey.y - o.y, o.x, o.y]
 }
 
+/**
+ * Pages copied twice (duplicated pages) share their annotation objects, but an annotation belongs
+ * to exactly one page: later copies get their own (shallow) clones, pointing back at their page.
+ */
+function ownAnnotations(doc: PDFDocument, page: PDFPage, seen: Set<string>) {
+  const annots = page.node.Annots()
+  if (!annots) return
+  const own = doc.context.obj([]) as PDFArray
+  for (let k = 0; k < annots.size(); k += 1) {
+    const ref = annots.get(k)
+    const dict = ref instanceof PDFRef ? doc.context.lookupMaybe(ref, PDFDict) : undefined
+    if (ref instanceof PDFRef && dict && seen.has(ref.toString())) {
+      const copy = dict.clone(doc.context)
+      copy.set(PDFName.of('P'), page.ref)
+      own.push(doc.context.register(copy))
+    } else {
+      if (ref instanceof PDFRef) seen.add(ref.toString())
+      own.push(ref)
+    }
+  }
+  page.node.set(PDFName.of('Annots'), own)
+}
+
 export async function buildPdf(
   pages: PageModel[],
   sources: Record<string, SourceMeta>,
@@ -122,8 +152,14 @@ export async function buildPdf(
   // Copy per source in a single call so duplicated pages share their resources.
   const copiedBySource = new Map<string, Awaited<ReturnType<PDFDocument['copyPages']>>>()
   const cursor = new Map<string, number>()
+  let droppedFields = false
+  let droppedOutline = false
   for (const sourceId of new Set(pages.map((p) => p.sourceId))) {
     const src = await PDFDocument.load(getBytes(sourceId), { updateMetadata: false })
+    // Only pages are copied: document-level structures are not carried over (say so).
+    const fields = src.catalog.lookupMaybe(PDFName.of('AcroForm'), PDFDict)?.lookupMaybe(PDFName.of('Fields'), PDFArray)
+    if (fields && fields.size() > 0) droppedFields = true
+    if (src.catalog.get(PDFName.of('Outlines'))) droppedOutline = true
     const indices = pages.filter((p) => p.sourceId === sourceId).map((p) => p.srcIndex)
     copiedBySource.set(sourceId, await out.copyPages(src, indices))
     cursor.set(sourceId, 0)
@@ -158,6 +194,7 @@ export async function buildPdf(
   let replacedChars = false
   let notMoved = 0
   let pasteFailed = 0
+  let stampFailed = 0
 
   // source documents for cut-outs (moved / pasted content), loaded once
   const srcDocs = new Map<string, Promise<PDFDocument>>()
@@ -172,19 +209,22 @@ export async function buildPdf(
   let scratch: PDFDocument | null = null
   let stampN = 0
   /** Draws only `refs` (objects of page sourceId/srcIndex) onto `page`, shifted by (dx, dy) in view space. */
-  const stamp = async (page: PDFPage, info: PageInfo, sourceId: string, srcIndex: number, refs: { id: string; src: SourceRef }[], dx: number, dy: number) => {
+  const stamp = async (page: PDFPage, info: PageInfo, sourceId: string, srcIndex: number, refs: { id: string; src: SourceRef }[], dx: number, dy: number, avoid: { id: string; src: SourceRef }[] = []) => {
     const from = sources[sourceId].pages[srcIndex]
     scratch ??= await PDFDocument.create()
     const [cut] = await scratch.copyPages(await srcDoc(sourceId), [srcIndex])
-    const ts = refs.map((r) => targetForSource(r.id, r.src, from)).filter((t): t is EditTarget => !!t)
-    const kept = keepOnly(scratch, cut, ts).done
+    const toTarget = (rs: { id: string; src: SourceRef }[]) => rs.map((r) => targetForSource(r.id, r.src, from)).filter((t): t is EditTarget => !!t)
+    const kept = keepOnly(scratch, cut, toTarget(refs), toTarget(avoid)).done
     notMoved += refs.length - kept.size
     if (!kept.size) return
     const form = await out.embedPage(cut, undefined, [1, 0, 0, 1, 0, 0])
     const name = page.node.newXObject(`Stamp${++stampN}`, form.ref)
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...placementMatrix(from, info, dx, dy)), drawObject(name), popGraphicsState())
   }
+  const seenAnnots = new Set<string>()
   const stats = { removed: 0, covered: 0 }
+  /** Edited / deleted objects whose original is still in the content stream, only painted over. */
+  let hiddenNotRemoved = 0
   for (const model of pages) {
     const list = copiedBySource.get(model.sourceId)!
     const i = cursor.get(model.sourceId)!
@@ -194,6 +234,7 @@ export async function buildPdf(
 
     if (model.rotation) page.setRotation(degrees((info.rotate + model.rotation) % 360))
     out.addPage(page)
+    ownAnnotations(out, page, seenAnnots)
 
     // 1. remove the original content of edited objects from the content stream (true removal);
     //    anything that cannot be matched safely is hidden with a cover instead.
@@ -209,7 +250,7 @@ export async function buildPdf(
         if (!o.deleted && !moved) continue
         const t = targetForSource(o.id, src, info, src.objType === 'IMAGE' && moved ? { dx: o.dx, dy: o.dy } : undefined)
         if (t) targets.push(t)
-      } else if (isText(o)) targets.push({ id: o.id, kind: 'text', rect })
+      } else if (isText(o)) targets.push({ id: o.id, kind: 'text', rect, exclude: foreignRects(src, info) })
       else if (isGraphic(o) && o.kind === 'line') {
         const horizontal = b.w >= b.h
         const e0 = horizontal ? viewToUser(info, b.x, b.y + b.h / 2) : viewToUser(info, b.x + b.w / 2, b.y)
@@ -234,6 +275,7 @@ export async function buildPdf(
     for (const o of model.overlays) {
       if (removed.has(o.id)) continue
       if (isText(o) && o.cover) {
+        hiddenNotRemoved += 1
         const r = viewRectToUser(info, o.cover.x, o.cover.y, o.cover.w, o.cover.h)
         page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: hexToRgb(o.cover.color), borderWidth: 0 })
       } else if (isGraphic(o) || isMove(o)) {
@@ -243,6 +285,7 @@ export async function buildPdf(
           if (targets.some((t) => t.id === o.id)) notMoved += 1
           continue
         }
+        hiddenNotRemoved += 1
         const b = o.source.bounds
         const pad = 0.75
         const r = viewRectToUser(info, b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad)
@@ -260,14 +303,28 @@ export async function buildPdf(
       g.refs.push({ id: o.id, src: o.source })
       groups.set(key, g)
     }
-    for (const g of groups.values()) await stamp(page, info, model.sourceId, model.srcIndex, g.refs, g.dx, g.dy)
+    const allMoved = [...groups.values()].flatMap((g) => g.refs)
+    for (const g of groups.values()) {
+      try {
+        // objects moved by another offset are drawn by their own group, never by this one
+        await stamp(page, info, model.sourceId, model.srcIndex, g.refs, g.dx, g.dy, allMoved.filter((r) => !g.refs.includes(r)))
+      } catch (e) {
+        console.warn('could not redraw moved content', e)
+        stampFailed += g.refs.length
+      }
+    }
     for (const o of model.overlays) {
       if (!isPaste(o)) continue
       if (!sources[o.sourceId]) {
         pasteFailed += 1
         continue
       }
-      await stamp(page, info, o.sourceId, o.srcIndex, o.items.map((it, k) => ({ id: `${o.id}:${k}`, src: it })), o.dx, o.dy)
+      try {
+        await stamp(page, info, o.sourceId, o.srcIndex, o.items.map((it, k) => ({ id: `${o.id}:${k}`, src: it })), o.dx, o.dy)
+      } catch (e) {
+        console.warn('could not draw pasted content', e)
+        pasteFailed += 1
+      }
     }
 
     for (const o of model.overlays) {
@@ -405,6 +462,15 @@ export async function buildPdf(
   }
   if (fontFallback) warnings.push('A font could not be loaded, so some text was exported with the closest standard PDF font.')
   if (notMoved) warnings.push(`${notMoved} moved object${notMoved > 1 ? 's' : ''} could not be moved exactly in the exported file and ${notMoved > 1 ? 'were' : 'was'} left in the original position.`)
-  if (pasteFailed) warnings.push('Some pasted content could not be exported because its source document is no longer loaded.')
+  if (hiddenNotRemoved) {
+    warnings.push(
+      `${hiddenNotRemoved} edited or deleted object${hiddenNotRemoved > 1 ? 's' : ''} could not be removed from the page content and ${hiddenNotRemoved > 1 ? 'are' : 'is'} only covered with a box of the background colour. ` +
+        'The original text is still in the file and can be selected, searched or copied. Do not rely on this export to remove confidential information.',
+    )
+  }
+  if (droppedFields) warnings.push('The original PDF has fillable form fields. They are not carried over: their current values still show, but the exported fields can no longer be filled in.')
+  if (droppedOutline) warnings.push('Bookmarks (the document outline) of the original PDF are not included in the export.')
+  if (pasteFailed) warnings.push('Some pasted content could not be exported (its source page could not be read or is no longer loaded).')
+  if (stampFailed) warnings.push(`${stampFailed} moved object${stampFailed > 1 ? 's' : ''} could not be drawn at the new position and ${stampFailed > 1 ? 'are' : 'is'} missing from the export. Check the page before using the file.`)
   return { bytes: await out.save(), warnings, stats }
 }

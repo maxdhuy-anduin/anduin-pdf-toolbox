@@ -134,7 +134,10 @@ export function analyzePage(raw: RawPage): PageContent {
       }
     } else if (p.segments.length) bump(p.op)
     for (const r of p.rects) {
-      if (r.w * r.h >= 0.95 * W * H) continue // page background
+      if (r.w * r.h >= 0.95 * W * H) {
+        bump(p.op) // page background: not an object, but it shares the operator
+        continue
+      }
       if (p.fill && r.h <= 2.5 && r.w >= 4) {
         rules.push({ o: 'h', x1: r.x, x2: r.x + r.w, y1: r.y + r.h / 2, y2: r.y + r.h / 2, thickness: r.h, color: p.fillColor, op: p.op, used: false })
       } else if (p.fill && r.w <= 2.5 && r.h >= 4) {
@@ -151,7 +154,7 @@ export function analyzePage(raw: RawPage): PageContent {
             { o: 'v', x1: r.x + r.w, x2: r.x + r.w, y1: r.y, y2: r.y + r.h, thickness: t, color: p.strokeColor, op: -1, used: false },
           )
         }
-      } else continue
+      } // else: a speck (< 2 pt), not an object, but it shares the operator
       bump(p.op)
     }
   }
@@ -534,6 +537,19 @@ export function analyzePage(raw: RawPage): PageContent {
       o.ops = [...ops].sort((a, b) => a - b)
       o.opsExclusive = known && o.ops.every((op) => [...(opOwner.get(op) ?? [])].every((owner) => lineIds.has(owner)))
       o.zIndex = o.ops[0] ?? 0
+    }
+  }
+  // other text drawn inside a text object's box (a footnote marker inside a paragraph) is not part
+  // of it: record it so export, which matches text by geometry, doesn't take it along
+  const textObjs = Object.values(objects).filter((o) => (o.type === 'TEXT_BLOCK' || o.type === 'TABLE_CELL') && o.ops.length)
+  for (const a of textObjs) {
+    const A = a.bounds
+    const mine = new Set(a.ops)
+    for (const b of textObjs) {
+      const B = b.bounds
+      if (b === a || B.x < A.x - 1 || B.y < A.y - 1 || B.x + B.w > A.x + A.w + 1 || B.y + B.h > A.y + A.h + 1) continue
+      if (b.ops.some((op) => mine.has(op))) continue // same content (e.g. a block in its cell)
+      ;(a.foreign ??= []).push({ ...B })
     }
   }
   // a table owns every vector path drawn entirely inside it (rules, borders, cell fills), so it can

@@ -82,7 +82,9 @@ describe('buildPdf', () => {
       ],
     }
     const { bytes: out, warnings } = await buildPdf([page], sources, bytes)
-    expect(warnings).toEqual([])
+    // a cover with no detected source object can only paint over the original: say so
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/only covered.*still in the file/)
     const doc = await PDFDocument.load(out)
     expect(doc.getPageCount()).toBe(1)
     const items = await viewItems(out, 0)
@@ -177,7 +179,8 @@ describe('Stage 6 demo workflow (end to end on the model)', () => {
 
     // 7. export + reopen
     const { bytes, warnings } = await buildPdf(s.pages, s.sources, bytesOf)
-    expect(warnings).toEqual([])
+    // the hand-made cover edit above has no source object, so the old value is only painted over
+    expect(warnings).toEqual([expect.stringMatching(/only covered.*still in the file/)])
     const doc = await PDFDocument.load(bytes)
     expect(doc.getPageCount()).toBe(7) // 7 - 1 deleted + 1 inserted
     const texts = await pageTexts(bytes)

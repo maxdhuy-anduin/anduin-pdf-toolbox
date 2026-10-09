@@ -11,6 +11,7 @@ export const sourceRef = (o: ContentObject): SourceRef => ({
   ops: o.ops,
   // a table owns no text itself (its cells do): it is exclusive even when it has no rules
   exclusive: o.opsExclusive && (o.ops.length > 0 || o.type === 'TABLE'),
+  ...(o.foreign?.length ? { foreign: o.foreign.map((b) => ({ ...b })) } : {}),
   ...(o.type === 'LINE' && o.x1 !== undefined ? { line: { x1: o.x1, y1: o.y1!, x2: o.x2!, y2: o.y2!, thickness: o.thickness ?? 1 } } : {}),
 })
 
@@ -96,8 +97,12 @@ export function graphicOverlayFromObject(o: ContentObject, content: PageContent,
   }
 }
 
-/** Snapshots of image objects (taken before the original is hidden) used to draw moved images on screen. */
+/**
+ * Snapshots of image objects (taken before the original is hidden) used to draw moved images on
+ * screen. Object ids are only unique within a page, so the key includes the source page.
+ */
 export const imageSnapshots = new Map<string, string>()
+export const snapshotKey = (sourceId: string, srcIndex: number, objectId: string) => `${sourceId}:${srcIndex}:${objectId}`
 
 export function snapshotRegion(canvas: HTMLCanvasElement | null | undefined, pageWidth: number, b: Box): string | null {
   if (!canvas) return null

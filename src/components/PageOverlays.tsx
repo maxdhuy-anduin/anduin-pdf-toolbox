@@ -4,7 +4,7 @@ import { clamp, rotateDelta, screenToLocal } from '../lib/geom'
 import { isGraphic, isLine, isMove, isPaste, isShape, isText, makeLineOverlay, makeShapeOverlay, makeTextOverlay, OPEN_SHAPES, type LineOverlay, type Overlay, type OverlayPatch, type PageInfo, type PageModel, type ShapeOverlay, type TextOverlay } from '../lib/model'
 import { getCachedContent, getPageContent, onContentAnalyzed } from '../lib/content/cache'
 import {
-  describeObject, graphicOverlayFromObject, imageSnapshots, isGraphicObject, isTextObject, OBJECT_LABEL, snapshotRegion, textOverlayFromObject,
+  describeObject, graphicOverlayFromObject, imageSnapshots, isGraphicObject, snapshotKey, isTextObject, OBJECT_LABEL, snapshotRegion, textOverlayFromObject,
 } from '../lib/content/edits'
 import type { Box, ContentObject, PageContent } from '../lib/content/types'
 import { expandObjects, groupBounds, hitItem, lineStyle, marqueeSelect, pageItems, planDelete, planMove, shapeStyle, type Item, type OverlayEdits } from '../lib/objects'
@@ -62,6 +62,9 @@ function itemLabel(it: Item): string {
   if (isGraphic(o)) return OBJECT_LABEL[o.source.objType] ?? 'Graphic'
   return 'Object'
 }
+
+/** Nonce of the last "edit this object" request already served (see AppCtx.editRequest). */
+let servedEditRequest = 0
 
 type Press =
   | { mode: 'drag'; key: string; keys: string[]; sx: number; sy: number; moved: boolean; wasOnlySelection: boolean }
@@ -159,15 +162,14 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
       const o = content.objects[objectId]
       if (!o || !isTextObject(o)) return
       const ov = textOverlayFromObject(o, content, canvas())
-      // a moved object is edited where it now is (the move becomes part of the edit)
+      // a moved object is edited where it now is; the move is replaced only if the edit is kept
       const mv = page.overlays.find((x) => isMove(x) && x.source.objectId === objectId)
       if (mv && isMove(mv)) {
         ov.x += mv.dx
         ov.y += mv.dy
-        dispatch({ type: 'editOverlays', pageId: page.id, remove: [mv.id] })
       }
       setObjSel(null)
-      dispatch({ type: 'startDraft', pageId: page.id, overlay: ov, original: o.text ?? '' })
+      dispatch({ type: 'startDraft', pageId: page.id, overlay: ov, original: o.text ?? '', replaces: mv?.id })
       setCaretAt(at)
       setEditingId(ov.id)
     },
@@ -176,7 +178,10 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
   )
 
   useEffect(() => {
-    if (editRequest && editRequest.pageId === page.id) editObject(editRequest.objectId, null)
+    // pages remount while scrolling: a request is served once, not again on every mount
+    if (!editRequest || editRequest.pageId !== page.id || editRequest.nonce <= servedEditRequest) return
+    servedEditRequest = editRequest.nonce
+    editObject(editRequest.objectId, null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRequest])
 
@@ -431,9 +436,10 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
       const keys = pr.keys
       for (const k of keys) {
         const it = itemByKey.get(k)
-        if (it?.obj?.type === 'IMAGE' && !imageSnapshots.has(it.obj.id)) {
+        const sk = it?.obj ? snapshotKey(page.sourceId, page.srcIndex, it.obj.id) : ''
+        if (it?.obj?.type === 'IMAGE' && !imageSnapshots.has(sk)) {
           const g = drag.ghosts.find((x) => x.key === k)
-          if (g?.src) imageSnapshots.set(it.obj.id, g.src)
+          if (g?.src) imageSnapshots.set(sk, g.src)
         }
       }
       const res = planMove(page, content, keys, drag.dx, drag.dy, canvas())
@@ -494,9 +500,10 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
       Object.assign(ov, { x: box.x, width: box.w, wrap: true })
       dispatch({ type: 'addOverlay', pageId: page.id, overlay: ov })
     } else if (isGraphicObject(o)) {
-      if (o.type === 'IMAGE' && !imageSnapshots.has(o.id)) {
+      const sk = snapshotKey(page.sourceId, page.srcIndex, o.id)
+      if (o.type === 'IMAGE' && !imageSnapshots.has(sk)) {
         const snap = snapshotRegion(cv, content.width, o.bounds)
-        if (snap) imageSnapshots.set(o.id, snap)
+        if (snap) imageSnapshots.set(sk, snap)
       }
       const g = graphicOverlayFromObject(o, content, cv)
       Object.assign(g, { x: box.x, y: box.y, w: box.w, h: box.h })
@@ -609,6 +616,7 @@ export function PageOverlays({ page, info, scale, canvasHolder, renderedHidden }
           <GraphicBox
             key={o.id}
             overlay={o}
+            snapshot={imageSnapshots.get(snapshotKey(page.sourceId, page.srcIndex, o.source.objectId))}
             scale={scale}
             rotation={page.rotation}
             selected={selOverlay === o.id || selSet.has(`v:${o.id}`)}

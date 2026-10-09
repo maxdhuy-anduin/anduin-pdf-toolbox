@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   deletePages, duplicatePages, initialState, insertPages, isDirty, makePage, makeTextOverlay, movePages, reducer, rotatePages,
-  type DocState, type SourceMeta, type TextOverlay,
+  type DocState, type Overlay, type SourceMeta, type TextOverlay,
 } from './model'
 
 const src: SourceMeta = {
@@ -147,6 +147,30 @@ describe('draft overlays', () => {
     s = reducer(s, { type: 'updateOverlay', pageId, overlayId: o.id, patch: { text: 'Changed' } })
     expect((s.pages[0].overlays[0] as TextOverlay).text).toBe('Changed')
   })
+  // regression: re-typing a moved object used to drop its move before anything was typed
+  const moved = () => {
+    let s = loaded()
+    const pageId = s.pages[0].id
+    const mv: Overlay = { id: 'mv1', type: 'move', source: { objectId: 'blk', objType: 'TEXT_BLOCK', bounds: { x: 0, y: 0, w: 50, h: 10 }, ops: [1], exclusive: true }, dx: 0, dy: 100, deleted: false, coverColor: '#ffffff' }
+    s = reducer(s, { type: 'addOverlay', pageId, overlay: mv })
+    const o = makeTextOverlay(0, 100, { text: 'Para', cover: { x: 0, y: 0, w: 50, h: 10, color: '#ffffff' } })
+    s = reducer(s, { type: 'startDraft', pageId, overlay: o, original: 'Para', replaces: 'mv1' })
+    return { s, pageId, o }
+  }
+  it('editing a moved object without changing it keeps the move', () => {
+    let { s } = moved()
+    expect(s.pages[0].overlays.map((x) => x.id)).toEqual(['mv1'])
+    s = reducer(s, { type: 'discardDraft' })
+    expect(s.pages[0].overlays.map((x) => x.id)).toEqual(['mv1'])
+    expect(s.past).toHaveLength(1)
+  })
+  it('committing the edit of a moved object replaces the move in one undo step', () => {
+    let { s, pageId, o } = moved()
+    s = reducer(s, { type: 'updateOverlay', pageId, overlayId: o.id, patch: { text: 'Para 2' } })
+    expect(s.pages[0].overlays.map((x) => x.type)).toEqual(['text'])
+    s = reducer(s, { type: 'undo' })
+    expect(s.pages[0].overlays.map((x) => x.id)).toEqual(['mv1'])
+  })
 })
 
 describe('dirty flag', () => {
@@ -158,5 +182,13 @@ describe('dirty flag', () => {
     expect(isDirty(s)).toBe(true)
     s = reducer(s, { type: 'markSaved' })
     expect(isDirty(s)).toBe(false)
+  })
+  it('an edit made while an export was running stays unsaved', () => {
+    let s = reducer(initialState, { type: 'load', source: src, fileName: 'a' })
+    s = reducer(s, { type: 'rotatePages', ids: [s.pages[0].id], delta: 90 })
+    const exported = s.pages
+    s = reducer(s, { type: 'rotatePages', ids: [s.pages[0].id], delta: 90 })
+    s = reducer(s, { type: 'markSaved', pages: exported })
+    expect(isDirty(s)).toBe(true)
   })
 })

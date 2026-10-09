@@ -59,6 +59,11 @@ export interface ContentObject {
   ops: number[]
   /** True when `ops` paint nothing but this object, so they can be hidden/removed safely. */
   opsExclusive: boolean
+  /**
+   * Text objects: boxes of *other* text objects drawn inside this one's bounds (e.g. a superscript
+   * footnote marker). Export finds an object's text by geometry, so it must leave these alone.
+   */
+  foreign?: Box[]
 
   // text objects (TEXT_BLOCK / TEXT_LINE / TEXT_SPAN / TABLE_CELL)
   text?: string

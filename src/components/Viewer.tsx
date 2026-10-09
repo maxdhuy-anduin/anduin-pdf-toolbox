@@ -55,7 +55,8 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
   const holderRef = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [renderedHidden, setRenderedHidden] = useState<Set<number>>(() => new Set())
-  const { tool, showBoxes, debug, search } = useApp()
+  const { tool, showBoxes, debug, search, state } = useApp()
+  const replacedByDraft = state.draft?.pageId === page.id ? state.draft.replaces : undefined
   const hits = useMemo(() => search?.hits.filter((h) => h.pageId === page.id && h.rects.length) ?? [], [search, page.id])
   const edited = useMemo(() => new Set(page.overlays.flatMap((o) => (o.source ? [o.source.objectId] : []))), [page.overlays])
   // Operators whose content has been replaced by an edit: skipped when rendering (exact hiding).
@@ -133,7 +134,7 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
           style={{ width: info.width * renderScale, height: info.height * renderScale, transform: k !== 1 ? `scale(${k})` : undefined, pointerEvents: tool === 'select' ? 'auto' : 'none' }}
         />
         {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
-        <ContentLayers page={page} scale={scale} renderScale={renderScale} />
+        <ContentLayers page={page} scale={scale} renderScale={renderScale} skip={replacedByDraft} />
         <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
         {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
         {hits.length > 0 && <SearchLayer hits={hits} activeId={search?.activeId ?? null} scale={scale} />}

@@ -45,6 +45,9 @@ const isTyping = (t: EventTarget | null) => {
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
 }
 
+/** A dialog owns the keyboard: document shortcuts (Delete, ⌘Z, tools, paste…) must not act behind it. */
+const modalOpen = () => !!document.querySelector('[aria-modal="true"]')
+
 /** View toggles: `?debug` / `?boxes` in the URL, else remembered per browser (convenience only). */
 function readFlag(name: string): boolean {
   try {
@@ -144,7 +147,8 @@ export default function App() {
     (kind: ToastKind, text: string, action?: ToastItem['action']) => {
       const id = (toastId.current += 1)
       setToasts((t) => [...t.slice(-3), { id, kind, text, action }])
-      setTimeout(() => dismissToast(id), kind === 'error' ? 9000 : 5500)
+      // warnings can be about the exported file's content: give them time to be read
+      setTimeout(() => dismissToast(id), kind === 'error' || kind === 'warning' ? 12000 : 5500)
     },
     [dismissToast],
   )
@@ -280,7 +284,7 @@ export default function App() {
       const base = baseName(s.fileName)
       const { bytes, warnings, stats } = await buildPdf(s.pages, s.sources, getSourceBytes, { title: base })
       downloadBytes(bytes, `${base}-edited.pdf`)
-      dispatch({ type: 'markSaved' })
+      dispatch({ type: 'markSaved', pages: s.pages })
       const edits = stats.removed + stats.covered
       toast(
         'success',
@@ -363,6 +367,7 @@ export default function App() {
   // ---- global events ----------------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (modalOpen()) return
       const mod = e.metaKey || e.ctrlKey
       const typing = isTyping(e.target)
       const s = stateRef.current
@@ -489,12 +494,19 @@ export default function App() {
       const items = pageItems(content, page.overlays, (id) => measureOverlay(page.id, id))
       const copied = copySelection(page, content, items, sel.keys)
       if (!copied) return null
+      const skipped = copied.skipped ?? 0
+      if (skipped && (cut || !copied.groups.length && !copied.texts.length && !copied.lines.length && !copied.shapes?.length)) {
+        // never delete what couldn't be copied
+        toast('warning', `${skipped} image${skipped > 1 ? 's' : ''} in the selection can't be copied (${skipped > 1 ? 'they share' : 'it shares'} drawing instructions with other content), so nothing was ${cut ? 'cut' : 'copied'}.`)
+        return null
+      }
       setClipboard(copied, page.id, (sid, i) => s.sources[sid].pages[i], (sid) => s.sources[sid]?.name ?? 'document')
       lastCopy = { at: Date.now(), text: copied.text }
       pasteCount.current = { id: '', n: 0 }
       const n = sel.keys.length
       if (cut) window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: page.id, op: 'delete' } }))
       toast('info', `${cut ? 'Cut' : 'Copied'} ${n} object${n > 1 ? 's' : ''}. Paste with ⌘V here, on another page, or in another document tab.`)
+      if (skipped) toast('warning', `${skipped} image${skipped > 1 ? 's' : ''} in the selection could not be copied (shared drawing instructions).`)
       return copied.text
     }
     const copy = (e: ClipboardEvent, cut: boolean) => {
@@ -507,7 +519,7 @@ export default function App() {
     const onCopy = (e: ClipboardEvent) => copy(e, false)
     const onCut = (e: ClipboardEvent) => copy(e, true)
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || isTyping(e.target) || !active()) return
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || isTyping(e.target) || !active() || modalOpen()) return
       const k = e.key.toLowerCase()
       if (k === 'c' || k === 'x') {
         const text = doCopy(k === 'x')
@@ -518,7 +530,7 @@ export default function App() {
       }
     }
     const onPaste = (e: ClipboardEvent) => {
-      if (isTyping(e.target) || !active()) return
+      if (isTyping(e.target) || !active() || modalOpen()) return
       window.clearTimeout(pasteTimer)
       e.preventDefault()
       void paste(e.clipboardData?.getData('text/plain') ?? '')
