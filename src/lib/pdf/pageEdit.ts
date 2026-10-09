@@ -38,6 +38,9 @@ export interface UserRect {
 interface TextMark {
   kind: 'text'
   op: number
+  /** k for the k-th text-showing operator of the stream (matches RawPage.textOps). */
+  ordinal: number
+  /** Baseline start / end of the painted glyphs (leading and trailing spaces excluded). */
   a: { x: number; y: number }
   b: { x: number; y: number }
   /** Advance in unscaled text space (to re-emit as [-n] TJ). */
@@ -187,6 +190,7 @@ function interpret(ops: Op[], resources: PDFDict | undefined): Mark[] {
   let tm: M = I
   let tlm: M = I
   let path: { start: number; subs: SubPath[]; cur: SubPath | null; clip: boolean } | null = null
+  let textOrdinal = 0
   const num = (o: Operand | undefined) => (o?.t === 'num' ? o.v : 0)
 
   const addPoint = (opIdx: number, x: number, y: number, newSub = false) => {
@@ -206,6 +210,10 @@ function interpret(ops: Op[], resources: PDFDict | undefined): Mark[] {
     const m = metrics(gs.font)
     let adv = 0
     let text = ''
+    // extent of what is actually painted: leading / trailing spaces (Word writes "(Date: )Tj") paint
+    // nothing, so they must not push the operator outside the object it belongs to
+    let inkStart: number | null = null
+    let inkEnd = 0
     for (const it of items) {
       if (it.t === 'num') {
         adv += (-it.v / 1000) * gs.size * gs.th
@@ -215,15 +223,21 @@ function interpret(ops: Op[], resources: PDFDict | undefined): Mark[] {
       const bytes = it.bytes
       for (let k = 0; k < bytes.length; k += m.twoByte ? 2 : 1) {
         const code = m.twoByte ? (bytes[k] << 8) | (bytes[k + 1] ?? 0) : bytes[k]
+        const blank = !m.twoByte && (code === 32 || code === 160)
         const space = !m.twoByte && code === 32 ? gs.tw : 0
+        const before = adv
         adv += ((m.width(code) / 1000) * gs.size + gs.tc + space) * gs.th
+        if (!blank) {
+          inkStart ??= before
+          inkEnd = adv
+        }
         text += String.fromCharCode(code)
       }
     }
     const trm = mul(tm, gs.ctm)
-    const a = apply(trm, 0, gs.ts)
-    const b = apply(trm, adv, gs.ts)
-    marks.push({ kind: 'text', op: opIdx, a, b, advance: adv, fontSize: gs.size, hScale: gs.th, show: text })
+    const a = apply(trm, inkStart ?? 0, gs.ts)
+    const b = apply(trm, inkStart === null ? adv : inkEnd, gs.ts)
+    marks.push({ kind: 'text', op: opIdx, ordinal: textOrdinal++, a, b, advance: adv, fontSize: gs.size, hScale: gs.th, show: text })
     tm = mul([1, 0, 0, 1, adv, 0], tm)
   }
 
@@ -363,8 +377,12 @@ function unitBox(m: M): UserRect {
 // ---------------------------------------------------------------------------
 
 export type EditTarget =
-  /** `exclude`: other objects' text inside `rect`, left untouched. */
-  | { id: string; kind: 'text'; rect: UserRect; exclude?: UserRect[] }
+  /**
+   * `exclude`: other objects' text inside `rect`, left untouched. `textOps`: the exact text-showing
+   * operators (ordinals) of the object, used instead of geometry when the stream agrees with them;
+   * `shared`: those operators also paint other objects, so they are never removed (cover instead).
+   */
+  | { id: string; kind: 'text'; rect: UserRect; exclude?: UserRect[]; textOps?: { ordinals: number[]; total: number }; shared?: boolean }
   | { id: string; kind: 'line'; rect: UserRect; ends: [{ x: number; y: number }, { x: number; y: number }]; thickness: number }
   | { id: string; kind: 'rect'; rect: UserRect }
   | { id: string; kind: 'image'; rect: UserRect; moveTo?: UserRect }
@@ -410,6 +428,17 @@ interface Match {
 
 /** Finds the painted marks of one target, or null when that can't be done safely. */
 function matchTarget(t: EditTarget, marks: Mark[], claimedMarks: Set<Mark>, claimedSubs: Set<SubPath>): Match | null {
+  if (t.kind === 'text' && t.textOps) {
+    // its operators also paint other objects: removing them would remove those too
+    if (t.shared) return null
+    const exact = matchByOrdinal(t, t.textOps, marks)
+    if (exact) {
+      if (exact.some((h) => claimedMarks.has(h))) return null
+      exact.forEach((h) => claimedMarks.add(h))
+      return { texts: exact, subs: [] }
+    }
+    // the stream doesn't agree with the analysis: fall back to geometry below
+  }
   if (t.kind === 'text') {
     const tol = 2
     const hits: TextMark[] = []
@@ -420,6 +449,7 @@ function matchTarget(t: EditTarget, marks: Mark[], claimedMarks: Set<Mark>, clai
       // our width estimate may be a few % off: allow that horizontally, never vertically
       const ib = inside(m.b, t.rect, tol, Math.max(tol, Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y) * 0.04))
       if (ia && ib) hits.push(m)
+      else if (touchesOnly(m, t.rect, tol)) continue // a neighbour ending / starting at the edge (a field's blank run, a footnote marker)
       else if (ia || ib || segmentCrosses(m.a, m.b, t.rect)) {
         if (DEBUG_EDITS) console.log('partial', JSON.stringify({ show: m.show, a: m.a, b: m.b, rect: t.rect, ia, ib }))
         return null // a text operator shared with content outside the object
@@ -610,6 +640,44 @@ function pruneXObjects(doc: PDFDocument, page: PDFPage, kept: Op[]) {
 
 function fmtNum(v: number) {
   return Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+/**
+ * Exact attribution: the object's own text-showing operators, by their position among the stream's
+ * text operators. Used only if the stream has the number of text operators the analysis saw and
+ * every one of them is painted inside the object's box (anything else means the two disagree).
+ */
+function matchByOrdinal(t: { rect: UserRect }, ops: { ordinals: number[]; total: number }, marks: Mark[]): TextMark[] | null {
+  const texts = marks.filter((m): m is TextMark => m.kind === 'text')
+  if (DEBUG_EDITS && texts.length !== ops.total) console.log('ordinal total mismatch', texts.length, ops.total)
+  if (texts.length !== ops.total) return null
+  const want = new Set(ops.ordinals)
+  const hits = texts.filter((m) => want.has(m.ordinal))
+  if (hits.length !== want.size) return null
+  const r = t.rect
+  const tol = 3
+  for (const h of hits) {
+    if (!h.show.trim()) continue // paints nothing
+    const tolX = Math.max(tol, Math.hypot(h.b.x - h.a.x, h.b.y - h.a.y) * 0.05)
+    if (!inside(h.a, r, tol, tolX) || !inside(h.b, r, tol, tolX)) {
+      if (DEBUG_EDITS) console.log('ordinal outside box', JSON.stringify({ show: h.show, a: h.a, b: h.b, r }))
+      return null
+    }
+  }
+  return hits
+}
+
+/**
+ * A horizontal text run that reaches into the box by no more than the tolerance only touches it
+ * (it is a neighbour: the analyzer's box would include it otherwise), so it neither belongs to the
+ * object nor makes the match unsafe.
+ */
+function touchesOnly(m: TextMark, r: UserRect, tol: number) {
+  if (Math.abs(m.b.y - m.a.y) > 0.5) return false // rotated / vertical text: keep the strict rule
+  const y = (m.a.y + m.b.y) / 2
+  if (y < r.y0 - tol || y > r.y1 + tol) return false
+  const overlap = Math.min(Math.max(m.a.x, m.b.x), r.x1) - Math.max(Math.min(m.a.x, m.b.x), r.x0)
+  return overlap <= tol
 }
 
 function segmentCrosses(a: { x: number; y: number }, b: { x: number; y: number }, r: UserRect) {

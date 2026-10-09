@@ -64,6 +64,8 @@ export interface ContentObject {
    * footnote marker). Export finds an object's text by geometry, so it must leave these alone.
    */
   foreign?: Box[]
+  /** Text objects: which text-showing operators of the page paint it (see RawPage.textOps). */
+  textOps?: { ordinals: number[]; total: number }
 
   // text objects (TEXT_BLOCK / TEXT_LINE / TEXT_SPAN / TABLE_CELL)
   text?: string
@@ -180,4 +182,10 @@ export interface RawPage {
   images: RawImage[]
   /** Operator-list indices of every operator that paints (text, paths, images, shadings). */
   paintOps?: number[]
+  /**
+   * Text-showing operators of the page's own content stream, in order: `ordinalOf[op]` = k for the
+   * k-th one (Form XObject and annotation content excluded). PDF.js turns every Tj / TJ / ' / " into
+   * one showText, so the same k identifies the operator in the content stream export edits.
+   */
+  textOps?: { ordinalOf: Record<number, number>; total: number }
 }

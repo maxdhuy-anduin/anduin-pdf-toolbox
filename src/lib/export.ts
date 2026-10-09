@@ -72,6 +72,11 @@ export function wrapLines(text: string, width: number, wrap: boolean, measure: (
 
 const TEXT_TYPES = new Set(['TEXT_BLOCK', 'TABLE_CELL', 'TEXT_LINE'])
 
+/** Text target: exact operators when known (shared ones are never removed), else geometry. */
+function textTarget(id: string, src: SourceRef, info: PageInfo, rect: UserRect): EditTarget {
+  return { id, kind: 'text', rect, exclude: foreignRects(src, info), ...(src.textOps ? { textOps: src.textOps, shared: !src.exclusive } : {}) }
+}
+
 function foreignRects(src: SourceRef, info: PageInfo): UserRect[] | undefined {
   return src.foreign?.map((f) => {
     const r = viewRectToUser(info, f.x, f.y, f.w, f.h)
@@ -84,7 +89,7 @@ export function targetForSource(id: string, src: SourceRef, info: PageInfo, move
   const b = src.bounds
   const r = viewRectToUser(info, b.x, b.y, b.w, b.h)
   const rect: UserRect = { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h }
-  if (TEXT_TYPES.has(src.objType)) return { id, kind: 'text', rect, exclude: foreignRects(src, info) }
+  if (TEXT_TYPES.has(src.objType)) return textTarget(id, src, info, rect)
   if (src.objType === 'TABLE') return { id, kind: 'paths', rect }
   if (src.objType === 'RECTANGLE') return { id, kind: 'rect', rect }
   if (src.objType === 'LINE') {
@@ -250,7 +255,7 @@ export async function buildPdf(
         if (!o.deleted && !moved) continue
         const t = targetForSource(o.id, src, info, src.objType === 'IMAGE' && moved ? { dx: o.dx, dy: o.dy } : undefined)
         if (t) targets.push(t)
-      } else if (isText(o)) targets.push({ id: o.id, kind: 'text', rect, exclude: foreignRects(src, info) })
+      } else if (isText(o)) targets.push(textTarget(o.id, src, info, rect))
       else if (isGraphic(o) && o.kind === 'line') {
         const horizontal = b.w >= b.h
         const e0 = horizontal ? viewToUser(info, b.x, b.y + b.h / 2) : viewToUser(info, b.x + b.w / 2, b.y)

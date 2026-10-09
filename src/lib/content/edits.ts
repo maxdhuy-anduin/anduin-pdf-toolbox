@@ -12,6 +12,7 @@ export const sourceRef = (o: ContentObject): SourceRef => ({
   // a table owns no text itself (its cells do): it is exclusive even when it has no rules
   exclusive: o.opsExclusive && (o.ops.length > 0 || o.type === 'TABLE'),
   ...(o.foreign?.length ? { foreign: o.foreign.map((b) => ({ ...b })) } : {}),
+  ...(o.textOps ? { textOps: { ordinals: [...o.textOps.ordinals], total: o.textOps.total } } : {}),
   ...(o.type === 'LINE' && o.x1 !== undefined ? { line: { x1: o.x1, y1: o.y1!, x2: o.x2!, y2: o.y2!, thickness: o.thickness ?? 1 } } : {}),
 })
 

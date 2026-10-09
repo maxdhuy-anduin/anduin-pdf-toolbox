@@ -96,6 +96,8 @@ export interface SourceRef {
   exclusive: boolean
   /** Boxes (view space) of other objects' text inside `bounds`, which export must not touch. */
   foreign?: { x: number; y: number; w: number; h: number }[]
+  /** The page's text-showing operators that paint this object (exact attribution for export). */
+  textOps?: { ordinals: number[]; total: number }
 }
 
 /** A detected line, rectangle or image that was moved, resized or deleted. */

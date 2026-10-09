@@ -536,6 +536,8 @@ export function analyzePage(raw: RawPage): PageContent {
       }
       o.ops = [...ops].sort((a, b) => a - b)
       o.opsExclusive = known && o.ops.every((op) => [...(opOwner.get(op) ?? [])].every((owner) => lineIds.has(owner)))
+      const ord = raw.textOps && o.ops.map((op) => raw.textOps!.ordinalOf[op])
+      if (ord && ord.length && ord.every((k) => k !== undefined)) o.textOps = { ordinals: ord, total: raw.textOps!.total }
       o.zIndex = o.ops[0] ?? 0
     }
   }

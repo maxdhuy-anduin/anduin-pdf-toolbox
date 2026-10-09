@@ -22,7 +22,7 @@ developer machine. Real-world documents were *not* tested in this audit (see §6
 |---|---|---|
 | `npm ci` | pass (0 vulnerabilities) | pass |
 | `npx tsc --noEmit` | pass | pass |
-| `npm test` (`vitest run`) | pass, 130 tests / 8 files | pass, **147 tests / 11 files** (152 / 12 with document tabs) |
+| `npm test` (`vitest run`) | pass, 130 tests / 8 files | pass, **147 tests / 11 files** (154 / 12 with document tabs and the sample-form checks) |
 | `npm run build` | pass (warning: 1.34 MB main chunk) | pass (same warning) |
 | `npm audit` | 0 vulnerabilities | 0 vulnerabilities |
 | lint | not configured | not configured |
@@ -84,6 +84,9 @@ Pass = observed working in the real app and/or verified in exported bytes. "Unit
 | D19 | P3 | Page-content hook keeps showing the previous page's stats until analysis lands and hides analysis errors; no `pointercancel` handling; object selection not revalidated after undo; Shift-click anchor is an index | minor state handling | **Open** |
 | D20 | P3 | Insert PDF defaults to after the scrolled-to page, not the clicked thumbnail | uses `currentIndex` | **Open**, documented |
 | D21 | P3 | PDF.js page proxies are cached for the document's lifetime (released on close) | no `page.cleanup()` | **Open** |
+| D22 | **P0** | On a real Word-generated form (the new sample), deleting an object also removed text of a *different*, untouched paragraph in the export (2 runs lost when deleting every other object; invisible on screen) | export matched text by geometry; real documents have overlapping / tightly packed object boxes | Fixed: exact operator attribution (ordinals of the page's text-showing operators, checked against the stream), geometry only as a fallback; shared operators never removed. `delete-exactness.test.ts` on the sample form fails without it |
+| D23 | P2 | 48 of 332 objects on the sample form could only be covered, not removed (stale text left in the file) | trailing spaces inside an operator and neighbour runs touching the box edge made matches look partial | Fixed (ink extent, touching neighbours ignored): 0 of 332 |
+| D24 | P2 | 29 of 332 objects marked as sharing operators with a neighbour (moved by re-typesetting, deleted by covering) | the extractor attributed a run that starts exactly where an item ends to that item | Fixed: 0 false shares; genuine shared runs (one `TJ` drawing several cells) still detected |
 
 ## 5. Security and privacy
 
