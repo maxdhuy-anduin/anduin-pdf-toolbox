@@ -8,3 +8,5 @@ test-fixtures
 coverage
 .env
 .env.*
+.vercel
+.env*

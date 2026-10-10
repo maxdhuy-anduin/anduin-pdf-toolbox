@@ -4,8 +4,12 @@ A focused, browser-only PDF tool for the workflows people reach for Acrobat for 
 duplicate, rotate, insert, extract, and edit PDF content as objects** (paragraphs, headings, tables and cells,
 lines, rectangles, images), then **export a real PDF**.
 
-> **Scope.** This is a focused internal tool for the Digitization team's routine PDF work. It is **not a replacement for Adobe
-> Acrobat** and has not been validated against Acrobat output. Keep using Acrobat (or another dedicated tool) for: **redaction**
+**Goal.** This app demonstrates what a browser-based tool can do for the Digitization team's routine PDF work. The aim, as the
+team decides, is to reduce Adobe Acrobat subscriptions and, eventually, replace Acrobat for that work. The app was built with AI
+(Claude Code); using it involves no AI: nothing is sent to an AI service, or anywhere else.
+
+> **Scope today.** It is **not yet a replacement for Adobe Acrobat** and has not been validated against Acrobat output. Keep
+> using Acrobat (or another dedicated tool) for: **redaction**
 > of confidential content, fillable forms (creating, filling or keeping form fields), digital signatures, OCR of scanned pages,
 > bookmarks, accessibility tags, PDF/A, comments/annotations, passwords and permissions, and document comparison.
 > Check every exported file before it is circulated, ideally in Adobe Reader.
@@ -32,8 +36,10 @@ npm run fixtures   # (optional) writes edge-case PDFs to test-fixtures/ for manu
 
 ### Deploying
 
-`npm run build` writes a static site to `dist/` (about 16 MB, mostly fonts and PDF.js assets). Serve that folder from any
-static host behind your SSO / VPN (it should not be public: the page is `noindex`, but there is no access control in the app).
+`npm run build` writes a static site to `dist/` (about 16 MB, mostly fonts and PDF.js assets). Any static host works. A public
+deployment is fine because documents never leave the visitor's browser; the app has no login and the page is `noindex`.
+The live demo is on Vercel's free plan (Vite preset: `npm run build`, output `dist`, Node 24): `vercel deploy --prod`.
+The bundled sample (`public/samples/sample-crs-fcl.pdf`, a blank form) is approved for publication.
 Notes:
 - The app expects to be served from the site root. To serve it from a sub-path (e.g. `/pdf-toolbox/`), build with
   `npx vite build --base=/pdf-toolbox/`; PDF.js assets and fonts follow `import.meta.env.BASE_URL`.
