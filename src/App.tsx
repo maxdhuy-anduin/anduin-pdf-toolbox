@@ -16,11 +16,15 @@ import { ThumbnailPanel } from './components/ThumbnailPanel'
 import { Toasts, type ToastItem } from './components/Toasts'
 import { Toolbar } from './components/Toolbar'
 import { Viewer } from './components/Viewer'
+import { CropBar } from './components/CropBar'
+import { getCropSelection, setCropSelection } from './lib/cropSelection'
 import { Button, Modal } from './components/ui'
 import { baseName, downloadBytes } from './lib/download'
+import { pdfFileName, pickSaveTarget, type SaveTarget } from './lib/saveFile'
+import { SaveAsDialog } from './components/SaveAsDialog'
 import { buildPdf } from './lib/export'
 import { rotateDelta } from './lib/geom'
-import { initialState, isDirty, isGraphic, isText, makePage, makeTextOverlay, reducer, uid, type Action, type Overlay } from './lib/model'
+import { initialState, isDirty, isGraphic, isText, makePage, makeTextOverlay, MIN_CROP, reducer, uid, type Action, type Overlay } from './lib/model'
 import { activeTab, anyDirty, defaultView, emptyTab, hasDocument, initialWorkspace, tabName, tabSources, workspaceReducer, type TabView } from './lib/workspace'
 import { getClipboard, sameText, setClipboard, TAB_ID } from './lib/clipboard'
 import { copySelection, pageItems } from './lib/objects'
@@ -39,6 +43,7 @@ const TOOL_HINTS: Record<Tool, [string, string]> = {
   'add-line': ['Add line', 'Drag on a page to draw a line · Shift = straight / 45° · Esc to cancel'],
   'add-shape': ['Add shape', 'Drag on a page to draw · Shift = square / circle · click for a default size · Esc to cancel'],
   'add-footnote': ['Footnote', 'Click right after a word: a number goes there and the note at the bottom of the page · Esc to cancel'],
+  crop: ['Crop', ''], // the crop bar is shown instead
 }
 
 const isPdfFile = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
@@ -351,21 +356,37 @@ export default function App() {
     [scrollToPage, toast],
   )
 
+  // ---- saving: the system Save dialog where available, else a name prompt and a download ----
+  const [saveAs, setSaveAs] = useState<{ suggested: string; resolve: (name: string | null) => void } | null>(null)
+  /** Asks where to save (call it first thing in a click / key handler). Null: cancelled. */
+  const chooseSaveTarget = useCallback(async (suggested: string): Promise<SaveTarget | null> => {
+    const picked = await pickSaveTarget(suggested)
+    if (picked !== 'unsupported') return picked
+    const name = await new Promise<string | null>((resolve) => setSaveAs({ suggested, resolve }))
+    setSaveAs(null)
+    if (name === null) return null
+    const file = pdfFileName(name, suggested)
+    return { name: file, picked: false, write: async (bytes) => downloadBytes(bytes, file) }
+  }, [])
+
   const exportPdf = useCallback(async () => {
     const s = stateRef.current
     const docId = activeRef.current
     if (!s.pages.length) return
+    const base = baseName(s.fileName)
+    const target = await chooseSaveTarget(`${base}-edited.pdf`)
+    if (!target) return
     setBusy('Preparing your PDF…')
     await new Promise((r) => setTimeout(r, 30))
     try {
-      const base = baseName(s.fileName)
       const { bytes, warnings, stats } = await buildPdf(s.pages, s.sources, getSourceBytes, { title: base })
-      downloadBytes(bytes, `${base}-edited.pdf`)
+      setBusy('Saving…')
+      await target.write(bytes)
       dispatchTo(docId, { type: 'markSaved', pages: s.pages })
       const edits = stats.removed + stats.covered
       toast(
         'success',
-        `Exported ${base}-edited.pdf (${s.pages.length} pages).` +
+        `${target.picked ? 'Saved' : 'Downloaded'} ${target.name} (${s.pages.length} pages).` +
           (edits ? ` ${stats.removed} of ${edits} edited object${edits > 1 ? 's were' : ' was'} rewritten in the page content${stats.covered ? `; ${stats.covered} could only be covered` : ''}.` : ''),
       )
       warnings.forEach((w) => toast('warning', w))
@@ -375,7 +396,7 @@ export default function App() {
     } finally {
       setBusy(null)
     }
-  }, [toast])
+  }, [toast, chooseSaveTarget, dispatchTo])
 
   const openExtract = useCallback(() => {
     const s = stateRef.current
@@ -388,12 +409,15 @@ export default function App() {
       const docId = activeRef.current
       const subset = req.indices.map((i) => s.pages[i]).filter(Boolean)
       if (!subset.length) return
+      const base = baseName(s.fileName)
+      const label = formatPageRange(req.indices).replace(/–/g, '-').replace(/, /g, '_')
+      // one file: asks where to save it (separate files are downloaded)
+      const target = req.separate ? null : await chooseSaveTarget(`${base}-pages-${label}.pdf`)
+      if (!req.separate && !target) return
       setExtractFor(null)
       setBusy(req.separate ? `Extracting ${subset.length} files…` : 'Extracting pages…')
       await new Promise((r) => setTimeout(r, 30))
       try {
-        const base = baseName(s.fileName)
-        const label = formatPageRange(req.indices).replace(/–/g, '-').replace(/, /g, '_')
         const warnings = new Set<string>()
         if (req.separate) {
           for (let k = 0; k < subset.length; k += 1) {
@@ -405,9 +429,9 @@ export default function App() {
           toast('success', `Extracted ${subset.length} page${subset.length > 1 ? 's' : ''} as separate files.`)
         } else {
           const r = await buildPdf(subset, s.sources, getSourceBytes, { title: `${base} (pages ${label})` })
-          downloadBytes(r.bytes, `${base}-pages-${label}.pdf`)
+          await target!.write(r.bytes)
           r.warnings.forEach((w) => warnings.add(w))
-          toast('success', `Extracted page${subset.length > 1 ? 's' : ''} ${formatPageRange(req.indices)} to ${base}-pages-${label}.pdf.`)
+          toast('success', `Extracted page${subset.length > 1 ? 's' : ''} ${formatPageRange(req.indices)} to ${target!.name}.`)
         }
         warnings.forEach((w) => toast('warning', w))
         if (req.deleteAfter && subset.length < s.pages.length) {
@@ -421,8 +445,40 @@ export default function App() {
         setBusy(null)
       }
     },
-    [toast],
+    [toast, chooseSaveTarget, dispatchTo],
   )
+
+  // ---- crop ----------------------------------------------------------------------
+  useEffect(() => {
+    if (tool !== 'crop') setCropSelection(null)
+  }, [tool])
+  /** Crops the page holding the crop selection (or every page) to it. */
+  const applyCrop = useCallback(
+    (allPages: boolean) => {
+      const sel = getCropSelection()
+      const s = stateRef.current
+      const docId = activeRef.current
+      const index = sel ? s.pages.findIndex((p) => p.id === sel.pageId) : -1
+      if (!sel || index < 0) return
+      if (sel.box.w < MIN_CROP || sel.box.h < MIN_CROP) {
+        toast('warning', 'The selected area is too small to crop to. Drag over a larger area.')
+        return
+      }
+      dispatch({ type: 'cropPages', ids: allPages ? s.pages.map((p) => p.id) : [sel.pageId], box: sel.box })
+      setCropSelection(null)
+      toast('success', allPages ? `Cropped all ${s.pages.length} pages.` : `Cropped page ${index + 1}.`, { label: 'Undo', run: () => dispatchTo(docId, { type: 'undo' }) })
+    },
+    [toast, dispatchTo],
+  )
+  const removeAllCrops = useCallback(() => {
+    const s = stateRef.current
+    const docId = activeRef.current
+    const ids = s.pages.filter((p) => p.crop).map((p) => p.id)
+    if (!ids.length) return
+    dispatch({ type: 'cropPages', ids, box: null })
+    setCropSelection(null)
+    toast('success', `Removed the crop from ${ids.length} page${ids.length > 1 ? 's' : ''}.`, { label: 'Undo', run: () => dispatchTo(docId, { type: 'undo' }) })
+  }, [toast, dispatchTo])
 
   closeOrganizeRef.current = () => closeOrganize()
   const openOrganize = useCallback(() => {
@@ -467,6 +523,11 @@ export default function App() {
       if (s.pages.length && !organizeRef.current && mod && (e.key.toLowerCase() === 'f' || e.code === 'KeyF')) {
         e.preventDefault()
         openFind(e.altKey)
+        return
+      }
+      if (mod && e.key.toLowerCase() === 'k' && toolRef.current === 'crop' && getCropSelection()) {
+        e.preventDefault()
+        applyCrop(false)
         return
       }
       if (s.pages.length && findRef.current.open && mod && e.key.toLowerCase() === 'g') {
@@ -516,6 +577,11 @@ export default function App() {
         const step = e.shiftKey ? 10 : 1
         const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as [number, number]
         window.dispatchEvent(new CustomEvent('toolbox:objects', { detail: { pageId: objSelRef.current.pageId, op: 'nudge', dx: d[0], dy: d[1] } }))
+      } else if (e.key === 'Enter' && toolRef.current === 'crop' && getCropSelection()) {
+        e.preventDefault()
+        applyCrop(false)
+      } else if (e.key === 'Escape' && toolRef.current === 'crop' && getCropSelection()) {
+        setCropSelection(null)
       } else if (e.key === 'Enter' && obj) {
         e.preventDefault()
         requestEdit(obj.pageId, obj.objectId)
@@ -546,12 +612,13 @@ export default function App() {
       else if (e.key === 'l' || e.key === 'L') setTool('add-line')
       else if (e.key === 's' || e.key === 'S') setTool('add-shape')
       else if (e.key === 'n' || e.key === 'N') setTool('add-footnote')
+      else if (e.key === 'c' || e.key === 'C') setTool('crop')
       else if (e.key === 'r' || e.key === 'R') setShowRulers(!showRulersRef.current)
       else if (e.key === 'b' || e.key === 'B') setShowBoxes(!showBoxesRef.current)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes, openFind, setShowRulers])
+  }, [currentIndex, deleteTargets, exportPdf, setTool, requestEdit, toggleDebug, setShowBoxes, openFind, setShowRulers, applyCrop])
 
   // ---- copy / cut / paste of PDF objects ---------------------------------------
   const pasteCount = useRef<{ id: string; n: number }>({ id: '', n: 0 })
@@ -821,7 +888,16 @@ export default function App() {
                     top={showRulers ? 32 : 12}
                   />
                 )}
-                {tool !== 'select' && !find.open && (
+                {tool === 'crop' && !find.open && (
+                  <CropBar
+                    pageCount={state.pages.length}
+                    anyCropped={state.pages.some((p) => p.crop)}
+                    onCrop={applyCrop}
+                    onRemoveAll={removeAllCrops}
+                    onDone={() => setTool('select')}
+                  />
+                )}
+                {tool !== 'select' && tool !== 'crop' && !find.open && (
                   <div className="pointer-events-none absolute left-1/2 z-20 flex w-max max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-2.5 bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-white shadow-lg" style={{ top: showRulers ? 32 : 12 }}>
                     <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-sky">{TOOL_HINTS[tool][0]}</span>
                     {TOOL_HINTS[tool][1]}
@@ -847,6 +923,7 @@ export default function App() {
           onInsert={doInsert}
         />
       )}
+      {saveAs && <SaveAsDialog suggested={saveAs.suggested} onSave={(name) => saveAs.resolve(name)} onCancel={() => saveAs.resolve(null)} />}
       {extractFor && <ExtractDialog pageCount={state.pages.length} selected={extractFor} onClose={() => setExtractFor(null)} onExtract={(r) => void extractPages(r)} />}
       {confirmClose && (() => {
         const t = ws.tabs.find((x) => x.id === confirmClose)

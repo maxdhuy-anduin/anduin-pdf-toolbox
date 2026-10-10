@@ -243,7 +243,23 @@ export interface PageModel {
   /** Extra rotation chosen by the user (added to the page's intrinsic rotation). */
   rotation: Rotation
   overlays: Overlay[]
+  /**
+   * Area kept by Crop, in canonical page space (like Apple Preview: the rest is hidden by the
+   * exported page's CropBox, not removed from the file). None = the whole page.
+   */
+  crop?: CropBox
 }
+
+/** A rectangle in canonical page space (points, origin top-left). */
+export interface CropBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** Smallest crop accepted (points on each side). */
+export const MIN_CROP = 18
 
 export const LINE_HEIGHT = 1.2
 
@@ -284,10 +300,46 @@ export function normalizeRotation(r: number): Rotation {
   return ((((r % 360) + 360) % 360) as Rotation)
 }
 
-/** Size of a page as displayed (intrinsic + user rotation applied), at scale 1. */
+/** The part of the page shown and exported (canonical page space): the crop, or the whole page. */
+export function visibleBox(page: PageModel, info: PageInfo): CropBox {
+  return page.crop ?? { x: 0, y: 0, w: info.width, h: info.height }
+}
+
+/** Size of a page as displayed (crop, intrinsic + user rotation applied), at scale 1. */
 export function displaySize(page: PageModel, info: PageInfo): { w: number; h: number } {
+  const b = visibleBox(page, info)
   const swap = page.rotation === 90 || page.rotation === 270
-  return swap ? { w: info.height, h: info.width } : { w: info.width, h: info.height }
+  return swap ? { w: b.h, h: b.w } : { w: b.w, h: b.h }
+}
+
+/**
+ * Crops pages to `box` (null: removes the crop). The box is clipped to each page; a page it
+ * barely overlaps is left as it is, and a box covering the whole page removes the crop.
+ */
+export function cropPages(pages: PageModel[], ids: string[], box: CropBox | null, infoOf: (p: PageModel) => PageInfo): PageModel[] {
+  const sel = new Set(ids)
+  let changed = false
+  const out = pages.map((p) => {
+    if (!sel.has(p.id)) return p
+    let crop: CropBox | undefined
+    if (box) {
+      const info = infoOf(p)
+      const x0 = Math.max(0, box.x)
+      const y0 = Math.max(0, box.y)
+      const x1 = Math.min(info.width, box.x + box.w)
+      const y1 = Math.min(info.height, box.y + box.h)
+      if (x1 - x0 < MIN_CROP || y1 - y0 < MIN_CROP) return p
+      const whole = x0 < 0.5 && y0 < 0.5 && x1 > info.width - 0.5 && y1 > info.height - 0.5
+      crop = whole ? undefined : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    }
+    const same = crop && p.crop ? crop.x === p.crop.x && crop.y === p.crop.y && crop.w === p.crop.w && crop.h === p.crop.h : !crop && !p.crop
+    if (same) return p
+    changed = true
+    const next = { ...p, crop }
+    if (!crop) delete next.crop
+    return next
+  })
+  return changed ? out : pages
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +450,8 @@ export type Action =
   | { type: 'duplicatePages'; ids: string[] }
   | { type: 'movePages'; ids: string[]; before: number }
   | { type: 'rotatePages'; ids: string[]; delta: number }
+  /** `box` in canonical page space; null removes the crop. */
+  | { type: 'cropPages'; ids: string[]; box: CropBox | null }
   | { type: 'addOverlay'; pageId: string; overlay: Overlay }
   | { type: 'updateOverlay'; pageId: string; overlayId: string; patch: OverlayPatch; coalesce?: string }
   | { type: 'removeOverlay'; pageId: string; overlayId: string }
@@ -486,6 +540,10 @@ export function reducer(state: DocState, action: Action): DocState {
     }
     case 'rotatePages':
       return commit(state, rotatePages(state.pages, action.ids, action.delta))
+    case 'cropPages': {
+      const pages = cropPages(state.pages, action.ids, action.box, (p) => state.sources[p.sourceId].pages[p.srcIndex])
+      return pages === state.pages ? state : commit(state, pages)
+    }
     case 'addOverlay': {
       const pages = state.pages.map((p) =>
         p.id === action.pageId ? { ...p, overlays: [...p.overlays, action.overlay] } : p,

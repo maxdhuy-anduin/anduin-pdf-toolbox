@@ -8,7 +8,7 @@ import type { Margins, Unit } from './lib/margins'
  * select = view & select text · edit = Acrobat-style object editing · add-text = place a new text box ·
  * add-line = draw a line · add-shape = draw a shape · add-footnote = click after a word to add a footnote
  */
-export type Tool = 'select' | 'edit' | 'add-text' | 'add-line' | 'add-shape' | 'add-footnote'
+export type Tool = 'select' | 'edit' | 'add-text' | 'add-line' | 'add-shape' | 'add-footnote' | 'crop'
 
 /** Find bar results shown on the pages. */
 export interface SearchView {

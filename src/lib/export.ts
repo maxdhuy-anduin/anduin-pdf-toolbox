@@ -230,6 +230,7 @@ export async function buildPdf(
   const stats = { removed: 0, covered: 0 }
   /** Edited / deleted objects whose original is still in the content stream, only painted over. */
   let hiddenNotRemoved = 0
+  let cropped = 0
   for (const model of pages) {
     const list = copiedBySource.get(model.sourceId)!
     const i = cursor.get(model.sourceId)!
@@ -238,6 +239,12 @@ export async function buildPdf(
     const info = sources[model.sourceId].pages[model.srcIndex]
 
     if (model.rotation) page.setRotation(degrees((info.rotate + model.rotation) % 360))
+    if (model.crop) {
+      // like Apple Preview: the crop box hides the rest of the page, which stays in the file
+      const c = viewRectToUser(info, model.crop.x, model.crop.y, model.crop.w, model.crop.h)
+      page.setCropBox(c.x, c.y, c.w, c.h)
+      cropped += 1
+    }
     out.addPage(page)
     ownAnnotations(out, page, seenAnnots)
 
@@ -471,6 +478,12 @@ export async function buildPdf(
     warnings.push(
       `${hiddenNotRemoved} edited or deleted object${hiddenNotRemoved > 1 ? 's' : ''} could not be removed from the page content and ${hiddenNotRemoved > 1 ? 'are' : 'is'} only covered with a box of the background colour. ` +
         'The original text is still in the file and can be selected, searched or copied. Do not rely on this export to remove confidential information.',
+    )
+  }
+  if (cropped) {
+    warnings.push(
+      `${cropped} cropped page${cropped > 1 ? 's' : ''}: as in Apple Preview, the area outside the crop is hidden, not deleted, and can be restored by other PDF apps. ` +
+        'Do not rely on cropping to remove confidential information.',
     )
   }
   if (droppedFields) warnings.push('The original PDF has fillable form fields. They are not carried over: their current values still show, but the exported fields can no longer be filled in.')

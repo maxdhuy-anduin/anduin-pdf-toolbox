@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Copy, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, Ruler, ScanLine, Search, Slash, SquareDashed, Superscript, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Crop, Ellipsis, FileOutput, FilePlus2, LayoutGrid, MousePointer2, PencilLine, RotateCcw, RotateCw, Ruler, ScanLine, Search, Slash, SquareDashed, Superscript, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
 import { useApp, type Tool } from '../context'
 import { clamp } from '../lib/geom'
 import { OPEN_SHAPES, type ShapeKind } from '../lib/model'
@@ -82,6 +82,7 @@ export function Toolbar({ targetIds, onInsert, onExtract, onDelete, onOpenTestSu
         ]}
       />
       {toolBtn('add-footnote', <Superscript size={16} />, 'Footnote', 'Footnote', 'N', false, 'Add a footnote: click right after a word; the note goes to the bottom of the page (N)')}
+      {toolBtn('crop', <Crop size={16} />, 'Crop', 'Crop', 'C', false, 'Crop pages: drag over the area to keep (C)')}
       <Divider />
       <ToolBtn icon={<LayoutGrid size={16} />} label="Organize" onClick={onOrganize} title="Organize pages: reorder by drag and drop, extract ranges, rotate, delete" />
       <ToolBtn iconOnly icon={<FilePlus2 size={16} />} label="Insert PDF" onClick={onInsert} title="Insert pages from another PDF" />

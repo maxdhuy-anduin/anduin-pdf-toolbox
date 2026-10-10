@@ -4,7 +4,7 @@ import { canvasToScreen } from '../lib/coords'
 import { getCachedContent } from '../lib/content/cache'
 import { detectMargins, formatLength, UNIT_PT, type Margins, type Unit } from '../lib/margins'
 import { groupBounds, pageItems } from '../lib/objects'
-import type { PageModel } from '../lib/model'
+import { visibleBox, type PageModel } from '../lib/model'
 import { measureOverlay } from './PageOverlays'
 
 export const RULER = 20
@@ -199,12 +199,13 @@ export function Rulers({ enabled, scrollRef, tops, contentW, sizes, scale, child
   const ox = size ? (contentW - size.w * scale) / 2 - sl : 0
   const oy = (tops[index] ?? 0) - st
 
-  // margins and selection, in display space (the page as rotated in the app)
-  const view = info && page ? { scale: 1, rotation: page.rotation, width: info.width, height: info.height } : null
+  // margins and selection, in display space (the page as rotated in the app; a cropped page from its crop's corner)
+  const vb = info && page ? visibleBox(page, info) : null
+  const view = vb && page ? { scale: 1, rotation: page.rotation, width: vb.w, height: vb.h } : null
   const toDisplay = (b: { x: number; y: number; w: number; h: number }) => {
-    if (!view) return null
-    const a = canvasToScreen({ x: b.x, y: b.y }, view)
-    const c = canvasToScreen({ x: b.x + b.w, y: b.y + b.h }, view)
+    if (!view || !vb) return null
+    const a = canvasToScreen({ x: b.x - vb.x, y: b.y - vb.y }, view)
+    const c = canvasToScreen({ x: b.x - vb.x + b.w, y: b.y - vb.y + b.h }, view)
     return { x0: Math.min(a.x, c.x), x1: Math.max(a.x, c.x), y0: Math.min(a.y, c.y), y1: Math.max(a.y, c.y) }
   }
   const content = page ? getCachedContent(page.sourceId, page.srcIndex) : undefined
@@ -225,8 +226,9 @@ export function Rulers({ enabled, scrollRef, tops, contentW, sizes, scale, child
   // dragging a margin marker (pages shown unrotated only): applies to every page
   const editable = !!page && page.rotation === 0 && !!info && !!m
   const dragMargin = (axis: 'x' | 'y') => (which: 0 | 1, pt: number) => {
-    if (!info || !m) return
-    const v = Math.round(Math.max(0, Math.min(axis === 'x' ? info.width : info.height, pt)) * 2) / 2
+    if (!info || !m || !vb) return
+    const at = pt + (axis === 'x' ? vb.x : vb.y) // ruler positions start at the (cropped) page's corner
+    const v = Math.round(Math.max(0, Math.min(axis === 'x' ? info.width : info.height, at)) * 2) / 2
     const next = { ...m }
     if (axis === 'x') {
       if (which === 0) next.left = Math.min(v, info.width - m.right - 18)

@@ -2,9 +2,10 @@ import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 import type { RenderTask } from 'pdfjs-dist'
 import { useApp } from '../context'
 import { clamp } from '../lib/geom'
-import { displaySize, type PageInfo, type PageModel } from '../lib/model'
+import { displaySize, visibleBox, type PageInfo, type PageModel } from '../lib/model'
 import { getPdfPage, pdfjs } from '../lib/pdfjs'
 import { ContentLayers } from './ContentLayers'
+import { CropLayer } from './CropLayer'
 import { LayoutLayer } from './LayoutLayer'
 import { PageOverlays } from './PageOverlays'
 import { Rulers } from './Rulers'
@@ -125,19 +126,24 @@ const PageContent = memo(function PageContent({ page, info, scale, renderScale }
   const w = info.width * scale
   const h = info.height * scale
   const k = scale / renderScale
+  // a cropped page shows only its crop: the full page is laid out inside, shifted and clipped
+  const v = visibleBox(page, info)
   return (
-    <Rotated w={w} h={h} rotation={page.rotation}>
-      <div className="relative h-full w-full overflow-hidden bg-white" style={{ width: w, height: h }}>
-        <div
-          ref={holderRef}
-          className="absolute left-0 top-0 origin-top-left"
-          style={{ width: info.width * renderScale, height: info.height * renderScale, transform: k !== 1 ? `scale(${k})` : undefined, pointerEvents: tool === 'select' ? 'auto' : 'none' }}
-        />
-        {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
-        <ContentLayers page={page} scale={scale} renderScale={renderScale} skip={replacedByDraft} />
-        <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
-        {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
-        {hits.length > 0 && <SearchLayer hits={hits} activeId={search?.activeId ?? null} scale={scale} />}
+    <Rotated w={v.w * scale} h={v.h * scale} rotation={page.rotation}>
+      <div className="relative h-full w-full overflow-hidden bg-white" style={{ width: v.w * scale, height: v.h * scale }}>
+        <div className="absolute" style={{ left: -v.x * scale, top: -v.y * scale, width: w, height: h }}>
+          <div
+            ref={holderRef}
+            className="absolute left-0 top-0 origin-top-left"
+            style={{ width: info.width * renderScale, height: info.height * renderScale, transform: k !== 1 ? `scale(${k})` : undefined, pointerEvents: tool === 'select' ? 'auto' : 'none' }}
+          />
+          {failed && <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted">This page could not be rendered ({failed}).</div>}
+          <ContentLayers page={page} scale={scale} renderScale={renderScale} skip={replacedByDraft} />
+          <PageOverlays page={page} info={info} scale={scale} canvasHolder={holderRef} renderedHidden={renderedHidden} />
+          {(showBoxes || debug) && <LayoutLayer page={page} info={info} scale={scale} edited={edited} />}
+          {hits.length > 0 && <SearchLayer hits={hits} activeId={search?.activeId ?? null} scale={scale} />}
+          {tool === 'crop' && <CropLayer page={page} info={info} scale={scale} />}
+        </div>
       </div>
     </Rotated>
   )

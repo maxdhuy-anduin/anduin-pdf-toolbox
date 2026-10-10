@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { ArrowUpRight, X } from 'lucide-react'
 
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -57,21 +57,81 @@ interface ToolBtnProps {
 
 export function ToolBtn({ icon, label, text, title, active, toggle, disabled, onClick, iconOnly }: ToolBtnProps) {
   const on = toggle ? 'bg-sky-soft text-sky-deep' : 'bg-ink text-white'
+  const tip = useTooltip(title ?? label)
   return (
-    <button
-      type="button"
-      title={title ?? label}
-      aria-label={label}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={onClick}
-      className={`inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap text-[13px] font-medium transition-colors disabled:opacity-35 ${iconOnly ? 'w-8 justify-center' : 'px-2'} ${
-        active ? on : 'text-ink-soft hover:bg-ink/5 hover:text-ink disabled:hover:bg-transparent'
-      }`}
+    // the wrapper shows the tooltip of a disabled button too (disabled buttons get no mouse events)
+    <span className="inline-flex shrink-0" {...tip.anchor}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        disabled={disabled}
+        onClick={onClick}
+        className={`inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap text-[13px] font-medium transition-colors disabled:opacity-35 ${iconOnly ? 'w-8 justify-center' : 'px-2'} ${
+          active ? on : 'text-ink-soft hover:bg-ink/5 hover:text-ink disabled:hover:bg-transparent'
+        }`}
+      >
+        {icon}
+        {!iconOnly && <span className="hidden min-[1360px]:inline">{text ?? label}</span>}
+      </button>
+      {tip.bubble}
+    </span>
+  )
+}
+
+/**
+ * A quick, styled tooltip (the browser's own `title` tooltip takes a second or more to show).
+ * Spread `anchor` on the element it describes and render `bubble`. A trailing "(X)" in the
+ * text is shown as a keyboard shortcut.
+ */
+export function useTooltip(text: string) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  const timer = useRef(0)
+  const hide = () => {
+    window.clearTimeout(timer.current)
+    setAt(null)
+  }
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const showFor = (el: HTMLElement, delay: number) => {
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => {
+      if (!el.isConnected) return
+      const r = el.getBoundingClientRect()
+      setAt({ x: r.left + r.width / 2, y: r.bottom + 6 })
+    }, delay)
+  }
+  return {
+    anchor: {
+      onPointerEnter: (e: React.PointerEvent<HTMLElement>) => e.pointerType === 'mouse' && showFor(e.currentTarget, 300),
+      onPointerLeave: hide,
+      onPointerDown: hide,
+      onFocus: (e: React.FocusEvent<HTMLElement>) => (e.target as HTMLElement).matches(':focus-visible') && showFor(e.currentTarget, 0),
+      onBlur: hide,
+      onKeyDown: (e: React.KeyboardEvent) => e.key === 'Escape' && hide(),
+    },
+    bubble: at ? <TooltipBubble x={at.x} y={at.y} text={text} /> : null,
+  }
+}
+
+function TooltipBubble({ x, y, text }: { x: number; y: number; text: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [left, setLeft] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const w = ref.current?.offsetWidth ?? 0
+    setLeft(Math.max(8, Math.min(x - w / 2, window.innerWidth - w - 8)))
+  }, [x, text])
+  const m = /^(.*\S)\s+\(([^()]{1,6})\)$/s.exec(text)
+  return createPortal(
+    <div
+      ref={ref}
+      role="tooltip"
+      className="pointer-events-none fixed z-[95] flex max-w-[300px] items-baseline gap-2 bg-ink px-2.5 py-1.5 text-[12px] leading-snug text-white shadow-[0_6px_18px_-6px_rgba(0,0,0,0.4)]"
+      style={{ top: y, left: left ?? x, visibility: left === null ? 'hidden' : 'visible' }}
     >
-      {icon}
-      {!iconOnly && <span className="hidden xl:inline">{text ?? label}</span>}
-    </button>
+      <span>{m ? m[1] : text}</span>
+      {m && <kbd className="shrink-0 border border-white/25 px-1 font-mono text-[10.5px] text-white/80">{m[2]}</kbd>}
+    </div>,
+    document.body,
   )
 }
 

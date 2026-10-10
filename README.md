@@ -123,10 +123,17 @@ The walkthrough below uses the synthetic demo document instead: **⋯ → Open d
     set your own for snapping and footnotes, double-click to go back to the detected ones) and the selection's extent.
 13. **Fonts**: text boxes can use Arial/Helvetica, Times New Roman, Courier New (standard PDF fonts) or Calibri, Cambria,
     Georgia, Garamond, Open Sans, Roboto, Lato (embedded, see below). Vietnamese and other Latin-script text works with these.
-14. **Export PDF** (Ctrl/Cmd+S). The toast reports how many edited objects were rewritten in the page content.
+14. **Export PDF** (Ctrl/Cmd+S). In Chrome and Edge the system Save dialog opens: pick the folder and change the name. In
+    Safari and Firefox the app asks for the file name, then the browser downloads it (to Downloads, or where its download
+    settings say). Cancel changes nothing. The toast reports how many edited objects were rewritten in the page content.
+    Extracting pages into one file asks the same way; one file per page goes to Downloads.
 15. **Tabs**: **Open** (⌘O, several files at once allowed) or drop PDFs on the tab bar: each document gets its own tab, with
     its own pages, edits, undo history and scroll position. **+** opens an empty tab; × (or middle-click) closes one and asks
     first if it has unsaved changes. Copy in one tab and ⌘V in another. Dropping a PDF on a *page* still inserts its pages.
+16. **Crop** (C), like Apple Preview: drag over the area to keep, adjust it by its handles or move it, then **Crop page**
+    (Enter or ⌘K) or **Crop all** (the same area on every page). Undo, or **Remove crops**, brings pages back in full. As in
+    Preview the rest of the page is hidden by the PDF's crop box, not deleted: the export warns that it is still in the file.
+17. **Tooltips**: hover any toolbar icon for its name and shortcut.
 
 **Seeing the layout model:** **Boxes** in the toolbar (or `B`, or `?boxes`) outlines every detected object by type: headings,
 paragraphs, lists, tables, cells, rules, rectangles and images. **⋯ → Show detected objects** (⇧⌘D, `?debug`) adds text lines
@@ -294,12 +301,16 @@ re-types that paragraph or cell exactly as editing it by hand would. Superscript
   part of the table and stays behind when the table moves.
 - Object detection runs on the main thread: typical pages take 1-30 ms, but very dense pages (tens of thousands of text
   items) can take seconds and freeze the UI meanwhile.
+- Crop hides the rest of the page (the PDF's crop box), as Apple Preview does; it does not remove that content, and other
+  PDF apps can show it again. It is not a redaction tool. The rulers measure from the cropped page's corner.
+- The system Save dialog needs Chrome or Edge (File System Access API); other browsers download to their download folder.
 - Insert PDF defaults to "after the current page" (the page scrolled into view), not the page clicked in the thumbnails.
 - Tested in Chromium only. Not verified in Firefox, Safari or Edge, or against Adobe Acrobat's rendering of exported files.
 
 ## Shortcuts
 
-`V` select · `E` edit · `T` add text · `L` add line · `S` add shape · `N` footnote · `R` rulers · `⌘/Ctrl+F` find ·
+`V` select · `E` edit · `T` add text · `L` add line · `S` add shape · `N` footnote · `C` crop (then `Enter` / `⌘K` crop the
+page, `Esc` clear the selection) · `R` rulers · `⌘/Ctrl+F` find ·
 `⌥⌘/Ctrl+Alt+F` replace · `⌘/Ctrl+G` / `⇧⌘G` next / previous match · in a text box `⇧⌘=` superscript · while dragging `⌥` = no
 snapping · Edit mode: drag empty space / `Shift`-click to select several, `⌘/Ctrl+A` select all
 on the page, `⌘/Ctrl+C` `X` `V` copy / cut / paste, arrows nudge the selection (`Shift` = 10 pt) · `Enter` edit the selected
@@ -311,7 +322,7 @@ object · `Del` delete the selected objects / text box / pages · `Esc` deselect
 **Pre-release audit, October 2026:** see [docs/QA-AUDIT.md](docs/QA-AUDIT.md) for the feature matrix, defects found and
 fixed, and what remains unverified.
 
-Automated (`npm test`, 154 tests; the list below describes the original 130): find (match case, whole words, typographic quotes, highlights inside the paragraph, moved
+Automated (`npm test`, 160 tests; the list below describes the original 130): find (match case, whole words, typographic quotes, highlights inside the paragraph, moved
 and deleted paragraphs), replace (preserve case, PDF paragraph → edited text present in the export, text boxes, replace all
 across pages = one undo step); superscripts (smaller and raised in the export, still real text); strikethrough position;
 shapes (exact position also on a page with /Rotate 90, filled / open shapes, move / delete / copy); arrowheads; smart guides

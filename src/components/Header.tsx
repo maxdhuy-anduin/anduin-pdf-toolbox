@@ -4,8 +4,13 @@ import { useApp } from '../context'
 import { Button } from './ui'
 
 /** The Anduin mark (transparent PNG, 5:4), served from public/brand. */
+/** The Anduin mark (vector: stays sharp at any size; 5:4). */
 export function Logo({ size = 22 }: { size?: number }) {
-  return <img src={`${import.meta.env.BASE_URL}brand/anduin-mark.png`} alt="" aria-hidden width={Math.round(size * 1.25)} height={size} className="block shrink-0 select-none" draggable={false} />
+  return (
+    <svg viewBox="0 0 960 768" width={size * 1.25} height={size} aria-hidden className="block shrink-0" style={{ width: size * 1.25, height: size }}>
+      <path fill="#1AB3EC" fillRule="evenodd" d="M480 0 960 768H767L672 614 576 768H384L288 614 192 768H0ZM480 302 389.5 456 480 604 570.5 456Z" />
+    </svg>
+  )
 }
 
 export function Header({ onOpen, onExport, exporting }: { onOpen: () => void; onExport: () => void; exporting: boolean }) {
