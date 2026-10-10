@@ -169,9 +169,15 @@ export async function extractPage(page: PDFPageProxy, lib: PdfjsLib): Promise<Ra
 
   const { fnArray, argsArray } = opList
   const paintOps: number[] = []
+  const ordinalOf: Record<number, number> = {}
+  let textOpCount = 0
+  let nested = 0 // inside a Form XObject or an annotation appearance: not the page's own stream
   for (let i = 0; i < fnArray.length; i += 1) {
     const fn = name[fnArray[i]]
     const a = (argsArray[i] ?? []) as unknown[]
+    if (fn === 'paintFormXObjectBegin' || fn === 'beginAnnotation') nested += 1
+    else if (fn === 'paintFormXObjectEnd' || fn === 'endAnnotation') nested = Math.max(0, nested - 1)
+    else if (fn === 'showText' && nested === 0) ordinalOf[i] = textOpCount++
     if (PAINT_OPS.has(fn) || (fn === 'constructPath' && name[a[0] as number] !== 'endPath')) paintOps.push(i)
     switch (fn) {
       case 'save':
@@ -385,7 +391,8 @@ export async function extractPage(page: PDFPageProxy, lib: PdfjsLib): Promise<Ra
       if (Math.abs(r.baseline - baseline) > Math.max(0.6, 0.3 * size)) continue
       const overlap = Math.min(r.x1, x + width) - Math.max(r.x0, x)
       const minW = Math.max(0.5, Math.min(r.x1 - r.x0, width))
-      if (overlap > 0.3 * minW || (r.x0 >= x - 0.5 && r.x0 <= x + width + 0.5)) {
+      // a run starting exactly where this item ends (a footnote marker, the next word) is a neighbour
+      if (overlap > 0.3 * minW || (r.x0 >= x - 0.5 && r.x0 < x + width - 0.5)) {
         ops.push(r.op)
         if (color === null) color = r.color
       }
@@ -406,7 +413,7 @@ export async function extractPage(page: PDFPageProxy, lib: PdfjsLib): Promise<Ra
     })
   }
 
-  return { width: vp.width, height: vp.height, texts, paths, images, fonts, paintOps }
+  return { width: vp.width, height: vp.height, texts, paths, images, fonts, paintOps, textOps: { ordinalOf, total: textOpCount } }
 }
 
 /** Recognises an axis-aligned rectangle subpath (4 corners, optionally closed). */

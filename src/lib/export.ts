@@ -72,6 +72,11 @@ export function wrapLines(text: string, width: number, wrap: boolean, measure: (
 
 const TEXT_TYPES = new Set(['TEXT_BLOCK', 'TABLE_CELL', 'TEXT_LINE'])
 
+/** Text target: exact operators when known (shared ones are never removed), else geometry. */
+function textTarget(id: string, src: SourceRef, info: PageInfo, rect: UserRect): EditTarget {
+  return { id, kind: 'text', rect, exclude: foreignRects(src, info), ...(src.textOps ? { textOps: src.textOps, shared: !src.exclusive } : {}) }
+}
+
 function foreignRects(src: SourceRef, info: PageInfo): UserRect[] | undefined {
   return src.foreign?.map((f) => {
     const r = viewRectToUser(info, f.x, f.y, f.w, f.h)
@@ -84,7 +89,7 @@ export function targetForSource(id: string, src: SourceRef, info: PageInfo, move
   const b = src.bounds
   const r = viewRectToUser(info, b.x, b.y, b.w, b.h)
   const rect: UserRect = { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h }
-  if (TEXT_TYPES.has(src.objType)) return { id, kind: 'text', rect, exclude: foreignRects(src, info) }
+  if (TEXT_TYPES.has(src.objType)) return textTarget(id, src, info, rect)
   if (src.objType === 'TABLE') return { id, kind: 'paths', rect }
   if (src.objType === 'RECTANGLE') return { id, kind: 'rect', rect }
   if (src.objType === 'LINE') {
@@ -225,6 +230,7 @@ export async function buildPdf(
   const stats = { removed: 0, covered: 0 }
   /** Edited / deleted objects whose original is still in the content stream, only painted over. */
   let hiddenNotRemoved = 0
+  let cropped = 0
   for (const model of pages) {
     const list = copiedBySource.get(model.sourceId)!
     const i = cursor.get(model.sourceId)!
@@ -233,6 +239,12 @@ export async function buildPdf(
     const info = sources[model.sourceId].pages[model.srcIndex]
 
     if (model.rotation) page.setRotation(degrees((info.rotate + model.rotation) % 360))
+    if (model.crop) {
+      // like Apple Preview: the crop box hides the rest of the page, which stays in the file
+      const c = viewRectToUser(info, model.crop.x, model.crop.y, model.crop.w, model.crop.h)
+      page.setCropBox(c.x, c.y, c.w, c.h)
+      cropped += 1
+    }
     out.addPage(page)
     ownAnnotations(out, page, seenAnnots)
 
@@ -250,7 +262,7 @@ export async function buildPdf(
         if (!o.deleted && !moved) continue
         const t = targetForSource(o.id, src, info, src.objType === 'IMAGE' && moved ? { dx: o.dx, dy: o.dy } : undefined)
         if (t) targets.push(t)
-      } else if (isText(o)) targets.push({ id: o.id, kind: 'text', rect, exclude: foreignRects(src, info) })
+      } else if (isText(o)) targets.push(textTarget(o.id, src, info, rect))
       else if (isGraphic(o) && o.kind === 'line') {
         const horizontal = b.w >= b.h
         const e0 = horizontal ? viewToUser(info, b.x, b.y + b.h / 2) : viewToUser(info, b.x + b.w / 2, b.y)
@@ -466,6 +478,12 @@ export async function buildPdf(
     warnings.push(
       `${hiddenNotRemoved} edited or deleted object${hiddenNotRemoved > 1 ? 's' : ''} could not be removed from the page content and ${hiddenNotRemoved > 1 ? 'are' : 'is'} only covered with a box of the background colour. ` +
         'The original text is still in the file and can be selected, searched or copied. Do not rely on this export to remove confidential information.',
+    )
+  }
+  if (cropped) {
+    warnings.push(
+      `${cropped} cropped page${cropped > 1 ? 's' : ''}: as in Apple Preview, the area outside the crop is hidden, not deleted, and can be restored by other PDF apps. ` +
+        'Do not rely on cropping to remove confidential information.',
     )
   }
   if (droppedFields) warnings.push('The original PDF has fillable form fields. They are not carried over: their current values still show, but the exported fields can no longer be filled in.')

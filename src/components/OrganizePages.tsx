@@ -216,7 +216,7 @@ export function OrganizePages({ onClose, onInsert, onExtract, onDelete }: Props)
             const ds = displaySize(p, info)
             // fit the rotated page inside a size×size box
             const w = ds.w >= ds.h ? size : (size * ds.w) / ds.h
-            const thumbW = p.rotation % 180 ? (w * info.width) / info.height : w
+            const thumbW = p.rotation % 180 ? (w * ds.h) / ds.w : w
             const isSel = selected.has(p.id)
             const dragging = dragIds?.includes(p.id)
             return (
@@ -243,7 +243,7 @@ export function OrganizePages({ onClose, onInsert, onExtract, onDelete }: Props)
                 {dropBefore === i && <div className="pointer-events-none absolute -left-[13px] bottom-1 top-1 w-[3px] bg-sky-deep" />}
                 {dropBefore === n && i === n - 1 && <div className="pointer-events-none absolute -right-[13px] bottom-1 top-1 w-[3px] bg-sky-deep" />}
                 <div className="flex items-center justify-center" style={{ height: size }}>
-                  <PageThumb sourceId={p.sourceId} srcIndex={p.srcIndex} info={info} rotation={p.rotation} width={thumbW} />
+                  <PageThumb sourceId={p.sourceId} srcIndex={p.srcIndex} info={info} rotation={p.rotation} width={thumbW} crop={p.crop} />
                 </div>
                 <div className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-ink-soft">
                   <span className={isSel ? 'text-sky-deep' : ''}>{i + 1}</span>
@@ -279,7 +279,7 @@ export function OrganizePages({ onClose, onInsert, onExtract, onDelete }: Props)
             <div className="relative">
               {ghost.count > 1 && <div className="absolute left-1.5 top-1.5 h-full w-full border border-line bg-white" />}
               <div className="relative border border-sky-deep bg-white p-1 shadow-xl" style={{ width: 70 }}>
-                <PageThumb sourceId={pages[ghost.i].sourceId} srcIndex={pages[ghost.i].srcIndex} info={sources[pages[ghost.i].sourceId].pages[pages[ghost.i].srcIndex]} rotation={pages[ghost.i].rotation} width={60} />
+                <PageThumb sourceId={pages[ghost.i].sourceId} srcIndex={pages[ghost.i].srcIndex} info={sources[pages[ghost.i].sourceId].pages[pages[ghost.i].srcIndex]} rotation={pages[ghost.i].rotation} width={60} crop={pages[ghost.i].crop} />
               </div>
               {ghost.count > 1 && <span className="absolute -right-2 -top-2 bg-ink px-1.5 py-[1px] font-mono text-[10.5px] font-semibold text-white">{ghost.count}</span>}
             </div>

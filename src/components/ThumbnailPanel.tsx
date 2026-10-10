@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Type } from 'lucide-react'
 import { useApp } from '../context'
-import { displaySize, type PageInfo } from '../lib/model'
+import { displaySize, type CropBox, type PageInfo } from '../lib/model'
 import { getCachedThumb, renderThumb, THUMB_WIDTH } from '../lib/thumbs'
 import { Rotated } from './ui'
 
@@ -12,18 +12,24 @@ export const PageThumb = memo(function PageThumb({
   info,
   rotation = 0,
   width = THUMB_WIDTH,
+  crop,
 }: {
   sourceId: string
   srcIndex: number
   info: PageInfo
   rotation?: number
+  /** Visible width of the thumbnail (of the crop when the page is cropped). */
   width?: number
+  crop?: CropBox
 }) {
+  // a cropped page: the whole page is drawn at scale k and clipped to the crop
+  const k = width / (crop?.w ?? info.width)
+  const fullW = info.width * k
+  const h = crop ? crop.h * k : (width * info.height) / info.width
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [visible, setVisible] = useState(!!getCachedThumb(sourceId, srcIndex, width))
+  const [visible, setVisible] = useState(!!getCachedThumb(sourceId, srcIndex, fullW))
   const [failed, setFailed] = useState(false)
-  const h = (width * info.height) / info.width
 
   // Only thumbnails near the viewport hold pixels; the rest are released.
   useEffect(() => {
@@ -43,7 +49,7 @@ export const PageThumb = memo(function PageThumb({
       return
     }
     let cancelled = false
-    renderThumb(sourceId, srcIndex, info, width)
+    renderThumb(sourceId, srcIndex, info, fullW)
       .then((src) => {
         const c = canvasRef.current
         if (cancelled || !c) return
@@ -55,14 +61,16 @@ export const PageThumb = memo(function PageThumb({
     return () => {
       cancelled = true
     }
-  }, [visible, sourceId, srcIndex, info, width])
+  }, [visible, sourceId, srcIndex, info, fullW])
 
   return (
     <div ref={wrapRef}>
       <Rotated w={width} h={h} rotation={rotation}>
-        <div className="h-full w-full bg-white shadow-[0_0_0_1px_rgba(20,20,20,0.12)]">
+        <div className="relative h-full w-full overflow-hidden bg-white shadow-[0_0_0_1px_rgba(20,20,20,0.12)]">
           {failed ? (
             <div className="flex h-full items-center justify-center text-[10px] text-faint">Preview unavailable</div>
+          ) : crop ? (
+            <canvas ref={canvasRef} className="absolute block max-w-none" style={{ left: -crop.x * k, top: -crop.y * k, width: fullW, height: info.height * k }} />
           ) : (
             <canvas ref={canvasRef} className="block h-full w-full" />
           )}
@@ -155,7 +163,8 @@ export function ThumbnailPanel() {
           const isSel = selected.has(p.id)
           const isCurrent = i === currentIndex
           const ds = displaySize(p, info)
-          const thumbH = (THUMB_WIDTH * (ds.h / ds.w)) // rotated footprint height
+          // footprint height: the thumbnail is THUMB_WIDTH wide before the page's rotation
+          const thumbH = p.rotation % 180 ? THUMB_WIDTH : THUMB_WIDTH * (ds.h / ds.w)
           return (
             <div
               key={p.id}
@@ -175,7 +184,7 @@ export function ThumbnailPanel() {
               {dropBefore === i && <div className="pointer-events-none absolute -top-2 left-0 right-0 h-1 bg-sky-deep" />}
               {dropBefore === pages.length && i === pages.length - 1 && <div className="pointer-events-none absolute -bottom-2 left-0 right-0 h-1 bg-sky-deep" />}
               <div className="flex justify-center">
-                <PageThumb sourceId={p.sourceId} srcIndex={p.srcIndex} info={info} rotation={p.rotation} />
+                <PageThumb sourceId={p.sourceId} srcIndex={p.srcIndex} info={info} rotation={p.rotation} crop={p.crop} />
               </div>
               <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-ink-soft">
                 <span className={isCurrent ? 'text-sky-deep' : ''}>{i + 1}</span>
